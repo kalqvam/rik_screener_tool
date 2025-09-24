@@ -1,6 +1,35 @@
 import pandas as pd
 import xml.etree.ElementTree as ET
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Iterable
+
+
+def _normalize_text(value: str) -> str:
+    """Normalize text values to ensure proper UTF-8 decoding."""
+
+    try:
+        return value.encode("latin1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return value
+
+STATEMENT_METADATA: Dict[str, Dict[str, List[str]]] = {
+    "BS": {
+        "primary": ["Bilanss"],
+        "alternatives": []
+    },
+    "IS": {
+        "primary": ["Kasumiaruanne skeem 1"],
+        "alternatives": ["Kasumiaruanne skeem 2"]
+    }
+}
+
+def _safe_text(element: Optional[ET.Element]) -> Optional[str]:
+    if element is None or element.text is None:
+        return None
+    text = element.text.strip()
+    if not text:
+        return None
+
+    return _normalize_text(text)
 
 def parse_annual_reports_response(xml_response: ET.Element, company_code: str) -> Optional[Dict[str, Any]]:
     try:
@@ -51,10 +80,118 @@ def parse_company_info_response(xml_response: ET.Element, company_code: str) -> 
 
 def create_latest_reports_dataframe(reports_data: List[Dict[str, Any]], names_data: Optional[Dict[str, str]] = None) -> pd.DataFrame:
     df = pd.DataFrame(reports_data)
-    
+
     if names_data:
         df['company_name'] = df['company_code'].map(names_data)
         cols = ['company_code', 'company_name', 'latest_year', 'period_start', 'period_end']
         df = df[cols]
-    
+
     return df
+
+def extract_statement_code(
+    xml_response: ET.Element,
+    years: Iterable[int],
+    statement_type: str
+) -> str:
+    ns = {
+        'ns1': 'http://arireg.x-road.eu/producer/',
+        'soapenv': 'http://schemas.xmlsoap.org/soap/envelope/'
+    }
+
+    metadata = STATEMENT_METADATA.get(statement_type.upper())
+    if metadata is None:
+        raise ValueError(f"Unsupported statement type '{statement_type}'")
+
+    entries = xml_response.findall('.//ns1:majandusaasta_aruanded', ns)
+    if not entries:
+        raise ValueError("No annual reports available for the requested company")
+
+    codes: List[str] = []
+
+    for year in years:
+        primary_code: Optional[str] = None
+        alternative_code: Optional[str] = None
+
+        for entry in entries:
+            entry_year = _safe_text(entry.find('ns1:aruande_aasta', ns))
+            entry_name = _safe_text(entry.find('ns1:aruande_nimetus', ns))
+            entry_code = _safe_text(entry.find('ns1:aruande_kood', ns))
+
+            if entry_year is None or entry_name is None or entry_code is None:
+                continue
+
+            try:
+                entry_year_int = int(entry_year)
+            except ValueError:
+                continue
+
+            if entry_year_int != year:
+                continue
+
+            if entry_name in metadata['primary']:
+                primary_code = entry_code
+                break
+
+            if entry_name in metadata['alternatives']:
+                alternative_code = entry_code
+
+        if primary_code is not None:
+            codes.append(primary_code)
+        elif alternative_code is not None:
+            codes.append(alternative_code)
+        else:
+            raise ValueError(f"No {statement_type.upper()} code found for year {year}")
+
+    unique_codes = set(codes)
+    if len(unique_codes) > 1:
+        raise ValueError("Change in reporting structure detected across requested years")
+
+    return codes[0]
+
+def parse_financial_statement_response(xml_response: ET.Element) -> pd.DataFrame:
+    ns = {
+        'ns1': 'http://arireg.x-road.eu/producer/',
+        'soapenv': 'http://schemas.xmlsoap.org/soap/envelope/'
+    }
+
+    rows = []
+
+    for entry in xml_response.findall('.//ns1:majandusaasta_aruanded_read', ns):
+        line_code = _safe_text(entry.find('ns1:rea_nr', ns))
+        line_name = _safe_text(entry.find('ns1:rea_nimetus', ns))
+
+        for column in entry.findall('ns1:majandusaasta_aruanded_veerud', ns):
+            column_code = _safe_text(column.find('ns1:veeru_kood', ns))
+            column_name = _safe_text(column.find('ns1:veeru_nimetus', ns))
+            value_text = _safe_text(column.find('ns1:vaartus', ns))
+
+            if line_code is None or column_code is None:
+                continue
+
+            value = pd.to_numeric(value_text, errors='coerce') if value_text is not None else None
+
+            rows.append({
+                'line_code': line_code,
+                'line_name': line_name,
+                'column_code': column_code,
+                'column_name': column_name,
+                'value': value
+            })
+
+    if not rows:
+        return pd.DataFrame(columns=['line_code', 'line_name'])
+
+    df = pd.DataFrame(rows)
+
+    pivot = df.pivot_table(
+        index=['line_code', 'line_name'],
+        columns='column_code',
+        values='value',
+        aggfunc='first'
+    )
+
+    pivot = pivot.sort_index(axis=1)
+    pivot.columns = pivot.columns.astype(str)
+    pivot.reset_index(inplace=True)
+
+    return pivot

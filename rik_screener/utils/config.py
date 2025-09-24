@@ -20,7 +20,7 @@ class ConfigManager:
         return {
             'years': [2023, 2022, 2021],
             'legal_forms': ["AS", "OÜ"],
-            'encoding': 'utf-8',
+            'encoding': 'utf-8-sig',
             'csv_separator': ';',
             'chunk_size': 500000,
             'decimal_separator': '.',
