@@ -1,4 +1,5 @@
 from datetime import datetime
+from pathlib import Path
 from typing import Iterable, List, Optional, Tuple
 
 import pandas as pd
@@ -175,7 +176,9 @@ def get_financial_statements(
     starting_year: Optional[int] = None,
     num_requests: int = 1,
     year_step: int = 2,
-    rate_limit: int = 20
+    rate_limit: int = 20,
+    output_file: Optional[str] = None,
+    output_encoding: str = "utf-8-sig"
 ) -> pd.DataFrame:
 
     if num_requests < 1:
@@ -230,4 +233,22 @@ def get_financial_statements(
     combined_values.insert(0, 'line_name', line_name_column)
     combined_values.index.name = 'line_code'
 
+    if output_file:
+        _export_statements_to_csv(combined_values, output_file, output_encoding)
+
     return combined_values
+
+
+def _export_statements_to_csv(
+    statements: pd.DataFrame,
+    output_file: str,
+    encoding: str
+) -> None:
+    output_path = Path(output_file)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    statements.to_csv(output_path, encoding=encoding)
+
+    print(
+        f"Saved financial statements to {output_path} using {encoding} encoding for improved character support"
+    )
