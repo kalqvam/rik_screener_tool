@@ -44,7 +44,7 @@ def calculate_ratios(
         
         if not formulas:
             formulas = {
-                f"EBITDA_Margin_{years[0]}": f'("Ärikasum (kahjum)_{years[0]}" + "Põhivarade kulum ja väärtuse langus_{years[0]}") / "Müügitulu_{years[0]}"',
+                f"EBITDA_Margin_{years[0]}": f'("Ärikasum (kahjum)_{years[0]}" + abs("Põhivarade kulum ja väärtuse langus_{years[0]}")) / "Müügitulu_{years[0]}"',
                 "Revenue_Growth": f'("Müügitulu_{years[0]}" - "Müügitulu_{years[1]}") / "Müügitulu_{years[1]}"',
             }
     
