@@ -16,6 +16,7 @@ from .data_processors import (
     parse_company_info_response,
     parse_financial_statement_response,
     parse_statement_codes_by_year,
+    parse_consolidation_status_by_year,
 )
 from .utils import format_progress, validate_company_codes
 
@@ -242,7 +243,7 @@ def check_statement_consistency(
     statement_types: List[str] = None,
     rate_limit: int = 20,
     output_file: Optional[str] = None
-) -> Dict[str, Tuple[str, List[List[Optional[str]]]]]:
+) -> Dict[str, Tuple[str, List[List[Optional[str]]], str]]:
     """
     Check if statement codes remained consistent across a range of years for multiple companies.
 
@@ -257,10 +258,11 @@ def check_statement_consistency(
         output_file: Optional CSV file path to save results
 
     Returns:
-        Dictionary with company_code as key and tuple (answer, array) as value:
+        Dictionary with company_code as key and tuple (answer, array, consolidation_status) as value:
         - answer: "Yes" if all codes are consistent, "No" if any changed or missing
         - array: List of up to 3 lists (one per statement type), each containing statement codes
                  ordered from target_year to end_year
+        - consolidation_status: "Non-consolidated", "Consolidated", or "Consolidated since yyyy"
     """
     if statement_types is None:
         statement_types = ["BS", "IS", "CF"]
@@ -303,7 +305,7 @@ def check_statement_consistency(
 
         if xml_response is None:
             print(f"Failed to get data for company {company_code}")
-            results[company_code] = ("No", [[] for _ in valid_statement_types])
+            results[company_code] = ("No", [[] for _ in valid_statement_types], "Non-consolidated")
             continue
 
         # Parse statement codes by year
@@ -312,6 +314,13 @@ def check_statement_consistency(
             target_year,
             end_year,
             valid_statement_types
+        )
+
+        # Parse consolidation status by year
+        consolidation_by_year = parse_consolidation_status_by_year(
+            xml_response,
+            target_year,
+            end_year
         )
 
         # Check consistency for each statement type
@@ -338,8 +347,15 @@ def check_statement_consistency(
 
             result_arrays.append(codes)
 
+        # Determine consolidation status
+        consolidation_status = _determine_consolidation_status(
+            consolidation_by_year,
+            target_year,
+            end_year
+        )
+
         answer = "Yes" if is_consistent else "No"
-        results[company_code] = (answer, result_arrays)
+        results[company_code] = (answer, result_arrays, consolidation_status)
 
     print(f"\nCompleted: {len(results)} companies processed")
 
@@ -356,8 +372,76 @@ def check_statement_consistency(
 
     return results
 
+def _determine_consolidation_status(
+    consolidation_by_year: Dict[int, bool],
+    target_year: int,
+    end_year: int
+) -> str:
+    """
+    Determine consolidation status based on year-by-year consolidation flags.
+
+    Args:
+        consolidation_by_year: Dictionary with year as key and consolidation flag as value
+        target_year: Starting year (most recent)
+        end_year: Ending year (oldest)
+
+    Returns:
+        One of: "Non-consolidated", "Consolidated", "Consolidated since yyyy", "Non-consolidated since yyyy"
+    """
+    if not consolidation_by_year:
+        return "Non-consolidated"
+
+    # Build ordered list from target_year to end_year
+    years = list(range(target_year, end_year - 1, -1))
+    consolidation_flags = [consolidation_by_year.get(year, False) for year in years]
+
+    # Count consolidated vs non-consolidated years
+    consolidated_years = [y for y, flag in zip(years, consolidation_flags) if flag]
+    non_consolidated_years = [y for y, flag in zip(years, consolidation_flags) if not flag]
+
+    # All years consolidated
+    if len(consolidated_years) == len(years):
+        return "Consolidated"
+
+    # No years consolidated
+    if len(non_consolidated_years) == len(years):
+        return "Non-consolidated"
+
+    # Mixed - need to determine pattern
+    # Check if there's a transition point
+
+    # Find the first year where consolidation status changes
+    first_consolidated_idx = None
+    first_non_consolidated_after_consolidated_idx = None
+
+    for i, flag in enumerate(consolidation_flags):
+        if flag and first_consolidated_idx is None:
+            first_consolidated_idx = i
+        if not flag and first_consolidated_idx is not None and first_non_consolidated_after_consolidated_idx is None:
+            first_non_consolidated_after_consolidated_idx = i
+
+    # Started as non-consolidated, then became consolidated
+    if first_consolidated_idx is not None and first_consolidated_idx > 0:
+        # Check if all subsequent years are consolidated
+        all_subsequent_consolidated = all(consolidation_flags[first_consolidated_idx:])
+        if all_subsequent_consolidated:
+            return f"Consolidated since {years[first_consolidated_idx]}"
+
+    # Started as consolidated, then became non-consolidated
+    if first_non_consolidated_after_consolidated_idx is not None:
+        # Check if all subsequent years are non-consolidated
+        all_subsequent_non_consolidated = all(not flag for flag in consolidation_flags[first_non_consolidated_after_consolidated_idx:])
+        if all_subsequent_non_consolidated:
+            return f"Non-consolidated since {years[first_non_consolidated_after_consolidated_idx]}"
+
+    # Mixed pattern with no clear transition - default to showing most recent status
+    if consolidation_flags[0]:  # Most recent year
+        return "Consolidated"
+    else:
+        return "Non-consolidated"
+
 def _save_consistency_results_to_csv(
-    results: Dict[str, Tuple[str, List[List[Optional[str]]]]],
+    results: Dict[str, Tuple[str, List[List[Optional[str]]], str]],
     statement_types: List[str],
     target_year: int,
     end_year: int,
@@ -375,11 +459,12 @@ def _save_consistency_results_to_csv(
     """
     rows = []
 
-    for company_code, (answer, code_arrays) in results.items():
+    for company_code, (answer, code_arrays, consolidation_status) in results.items():
         row = {
             'company_code': company_code,
             'consistent': answer,
-            'year_range': f"{target_year}-{end_year}"
+            'year_range': f"{target_year}-{end_year}",
+            'consolidation_status': consolidation_status
         }
 
         # Add columns for each statement type
@@ -406,7 +491,7 @@ def _save_consistency_results_to_csv(
     df = pd.DataFrame(rows)
 
     # Reorder columns
-    base_cols = ['company_code', 'consistent', 'year_range']
+    base_cols = ['company_code', 'consistent', 'consolidation_status', 'year_range']
     st_cols = []
     for st in statement_types:
         st_cols.extend([f'{st}_codes', f'{st}_consistent'])

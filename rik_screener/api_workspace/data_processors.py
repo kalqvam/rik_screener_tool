@@ -280,3 +280,58 @@ def parse_statement_codes_by_year(
         result[st_upper] = codes
 
     return result
+
+def parse_consolidation_status_by_year(
+    xml_response: ET.Element,
+    target_year: int,
+    end_year: int
+) -> Dict[int, bool]:
+    """
+    Parse consolidation status for each year by checking if "konsolid" appears in any statement name.
+
+    Args:
+        xml_response: XML response from get_annual_reports_list
+        target_year: Starting year (most recent)
+        end_year: Ending year (oldest)
+
+    Returns:
+        Dictionary with year as key and boolean as value (True if "konsolid" found in any statement)
+    """
+    ns = {
+        'ns1': 'http://arireg.x-road.eu/producer/',
+        'soapenv': 'http://schemas.xmlsoap.org/soap/envelope/'
+    }
+
+    entries = xml_response.findall('.//ns1:majandusaasta_aruanded', ns)
+    if not entries:
+        return {}
+
+    # Track which years have consolidated statements
+    consolidation_by_year: Dict[int, bool] = {}
+
+    for entry in entries:
+        entry_year = _safe_text(entry.find('ns1:aruande_aasta', ns))
+        entry_name = _safe_text(entry.find('ns1:aruande_nimetus', ns))
+
+        if entry_year is None or entry_name is None:
+            continue
+
+        try:
+            entry_year_int = int(entry_year)
+        except ValueError:
+            continue
+
+        # Skip years outside the range
+        if entry_year_int < end_year or entry_year_int > target_year:
+            continue
+
+        # Check if "konsolid" appears in the statement name (case-insensitive)
+        entry_name_lower = entry_name.lower()
+        if 'konsolid' in entry_name_lower:
+            consolidation_by_year[entry_year_int] = True
+        else:
+            # Only set to False if not already set to True
+            if entry_year_int not in consolidation_by_year:
+                consolidation_by_year[entry_year_int] = False
+
+    return consolidation_by_year

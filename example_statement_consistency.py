@@ -48,9 +48,10 @@ if __name__ == "__main__":
     print("\nResults:")
     print("-" * 80)
 
-    for company_code, (consistent, code_arrays) in results.items():
+    for company_code, (consistent, code_arrays, consolidation_status) in results.items():
         print(f"\nCompany: {company_code}")
         print(f"Overall consistency: {consistent}")
+        print(f"Consolidation status: {consolidation_status}")
 
         for i, st in enumerate(statement_types):
             if i < len(code_arrays):
@@ -74,3 +75,5 @@ if __name__ == "__main__":
     # - If consistent = "No": At least one statement type changed or has missing data
     # - code_arrays contains the actual statement codes for each type and year
     #   (ordered from target_year to end_year)
+    # - consolidation_status: "Non-consolidated", "Consolidated",
+    #   "Consolidated since yyyy", or "Non-consolidated since yyyy"
