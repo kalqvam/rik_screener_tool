@@ -409,6 +409,7 @@ def _determine_consolidation_status(
 
     # Mixed - need to determine pattern
     # Check if there's a transition point
+    # Note: iteration goes from newest to oldest, but "since" refers to chronological transitions
 
     # Find the first year where consolidation status changes
     first_consolidated_idx = None
@@ -420,19 +421,23 @@ def _determine_consolidation_status(
         if not flag and first_consolidated_idx is not None and first_non_consolidated_after_consolidated_idx is None:
             first_non_consolidated_after_consolidated_idx = i
 
-    # Started as non-consolidated, then became consolidated
+    # Recent years non-consolidated, older years consolidated
+    # Chronologically: was consolidated, then STOPPED consolidating
     if first_consolidated_idx is not None and first_consolidated_idx > 0:
-        # Check if all subsequent years are consolidated
+        # Check if all subsequent years (going back in time) are consolidated
         all_subsequent_consolidated = all(consolidation_flags[first_consolidated_idx:])
         if all_subsequent_consolidated:
-            return f"Consolidated since {years[first_consolidated_idx]}"
+            # years[first_consolidated_idx - 1] is the first non-consolidated year chronologically
+            return f"Non-consolidated since {years[first_consolidated_idx - 1]}"
 
-    # Started as consolidated, then became non-consolidated
+    # Recent years consolidated, older years non-consolidated
+    # Chronologically: was non-consolidated, then STARTED consolidating
     if first_non_consolidated_after_consolidated_idx is not None:
-        # Check if all subsequent years are non-consolidated
+        # Check if all subsequent years (going back in time) are non-consolidated
         all_subsequent_non_consolidated = all(not flag for flag in consolidation_flags[first_non_consolidated_after_consolidated_idx:])
         if all_subsequent_non_consolidated:
-            return f"Non-consolidated since {years[first_non_consolidated_after_consolidated_idx]}"
+            # years[first_non_consolidated_after_consolidated_idx - 1] is the first consolidated year chronologically
+            return f"Consolidated since {years[first_non_consolidated_after_consolidated_idx - 1]}"
 
     # Mixed pattern with no clear transition - default to showing most recent status
     if consolidation_flags[0]:  # Most recent year
