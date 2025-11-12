@@ -195,7 +195,12 @@ def parse_statement_codes_by_year(
     statement_types: List[str]
 ) -> Dict[str, List[Optional[str]]]:
     """
-    Parse statement codes for multiple years and statement types.
+    Parse statement codes for multiple years and statement types using substring matching.
+
+    Matching rules (case-insensitive):
+    - BS: statement name contains "bilanss"
+    - IS: statement name contains "kasum"
+    - CF: statement name contains "raha"
 
     Args:
         xml_response: XML response from get_annual_reports_list
@@ -235,32 +240,26 @@ def parse_statement_codes_by_year(
         if entry_year_int < end_year or entry_year_int > target_year:
             continue
 
-        # Determine statement type based on name
+        # Determine statement type based on name using substring matching
         entry_name_lower = entry_name.lower()
 
+        # Mapping of statement types to search substrings (case-insensitive)
+        statement_search_map = {
+            'BS': 'bilanss',
+            'IS': 'kasum',
+            'CF': 'raha'
+        }
+
         for statement_type in statement_types:
-            metadata = STATEMENT_METADATA.get(statement_type.upper())
-            if metadata is None:
+            st_upper = statement_type.upper()
+            search_substring = statement_search_map.get(st_upper)
+
+            if search_substring is None:
                 continue
 
-            # Check if this entry matches the statement type
-            is_match = False
-
-            # Check primary names
-            for primary_name in metadata['primary']:
-                if primary_name == entry_name:
-                    is_match = True
-                    break
-
-            # Check alternative names if not matched
-            if not is_match:
-                for alt_name in metadata['alternatives']:
-                    if alt_name == entry_name:
-                        is_match = True
-                        break
-
-            if is_match:
-                key = (entry_year_int, statement_type.upper())
+            # Check if the search substring is in the entry name (case-insensitive)
+            if search_substring in entry_name_lower:
+                key = (entry_year_int, st_upper)
                 # Only store if not already stored (prioritize first match)
                 if key not in year_type_codes:
                     year_type_codes[key] = entry_code
