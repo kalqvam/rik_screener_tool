@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import pandas as pd
 
@@ -15,6 +15,7 @@ from .data_processors import (
     parse_annual_reports_response,
     parse_company_info_response,
     parse_financial_statement_response,
+    parse_statement_codes_by_year,
 )
 from .utils import format_progress, validate_company_codes
 
@@ -231,3 +232,187 @@ def get_financial_statements(
     combined_values.index.name = 'line_code'
 
     return combined_values
+
+def check_statement_consistency(
+    company_codes: List[str],
+    username: str,
+    password: str,
+    target_year: int,
+    end_year: int,
+    statement_types: List[str] = None,
+    rate_limit: int = 20,
+    output_file: Optional[str] = None
+) -> Dict[str, Tuple[str, List[List[Optional[str]]]]]:
+    """
+    Check if statement codes remained consistent across a range of years for multiple companies.
+
+    Args:
+        company_codes: List of company registry codes (or single code as list)
+        username: RIK API username
+        password: RIK API password
+        target_year: Starting year (most recent)
+        end_year: Ending year (oldest)
+        statement_types: List of statement types to check (e.g., ["BS", "IS", "CF"]). Defaults to ["BS", "IS", "CF"]
+        rate_limit: Requests per minute (default: 20)
+        output_file: Optional CSV file path to save results
+
+    Returns:
+        Dictionary with company_code as key and tuple (answer, array) as value:
+        - answer: "Yes" if all codes are consistent, "No" if any changed or missing
+        - array: List of up to 3 lists (one per statement type), each containing statement codes
+                 ordered from target_year to end_year
+    """
+    if statement_types is None:
+        statement_types = ["BS", "IS", "CF"]
+
+    if target_year < end_year:
+        raise ValueError(f"target_year ({target_year}) must be >= end_year ({end_year})")
+
+    set_api_config(username, password, rate_limit)
+
+    valid_codes = validate_company_codes(company_codes)
+
+    if not valid_codes:
+        print("No valid company codes provided")
+        return {}
+
+    # Validate statement types
+    valid_statement_types = []
+    for st in statement_types:
+        st_upper = st.upper()
+        if st_upper not in ["BS", "IS", "CF"]:
+            print(f"Warning: Invalid statement type '{st}', skipping. Valid types: BS, IS, CF")
+            continue
+        valid_statement_types.append(st_upper)
+
+    if not valid_statement_types:
+        print("No valid statement types provided")
+        return {}
+
+    print(f"Checking statement consistency for {len(valid_codes)} companies")
+    print(f"Year range: {target_year} to {end_year}")
+    print(f"Statement types: {', '.join(valid_statement_types)}")
+    print(f"Rate limit: {rate_limit}/min")
+
+    results = {}
+
+    for i, company_code in enumerate(valid_codes, 1):
+        print(format_progress(i, len(valid_codes), "Checking consistency"))
+
+        xml_response = get_annual_reports_list(company_code)
+
+        if xml_response is None:
+            print(f"Failed to get data for company {company_code}")
+            results[company_code] = ("No", [[] for _ in valid_statement_types])
+            continue
+
+        # Parse statement codes by year
+        codes_by_type = parse_statement_codes_by_year(
+            xml_response,
+            target_year,
+            end_year,
+            valid_statement_types
+        )
+
+        # Check consistency for each statement type
+        is_consistent = True
+        result_arrays = []
+
+        for st in valid_statement_types:
+            codes = codes_by_type.get(st, [])
+
+            # Filter out None values for consistency check
+            non_none_codes = [c for c in codes if c is not None]
+
+            # Check if all non-None codes are the same
+            if len(non_none_codes) > 0:
+                unique_codes = set(non_none_codes)
+                if len(unique_codes) > 1:
+                    is_consistent = False
+                # If any code is missing (None), mark as inconsistent
+                if None in codes:
+                    is_consistent = False
+            else:
+                # No codes found for this statement type
+                is_consistent = False
+
+            result_arrays.append(codes)
+
+        answer = "Yes" if is_consistent else "No"
+        results[company_code] = (answer, result_arrays)
+
+    print(f"\nCompleted: {len(results)} companies processed")
+
+    # Save to CSV if output_file is specified
+    if output_file:
+        _save_consistency_results_to_csv(
+            results,
+            valid_statement_types,
+            target_year,
+            end_year,
+            output_file
+        )
+        print(f"Results saved to {output_file}")
+
+    return results
+
+def _save_consistency_results_to_csv(
+    results: Dict[str, Tuple[str, List[List[Optional[str]]]]],
+    statement_types: List[str],
+    target_year: int,
+    end_year: int,
+    output_file: str
+) -> None:
+    """
+    Save consistency check results to a CSV file.
+
+    Args:
+        results: Dictionary from check_statement_consistency
+        statement_types: List of statement types checked
+        target_year: Starting year
+        end_year: Ending year
+        output_file: Path to output CSV file
+    """
+    rows = []
+
+    for company_code, (answer, code_arrays) in results.items():
+        row = {
+            'company_code': company_code,
+            'consistent': answer,
+            'year_range': f"{target_year}-{end_year}"
+        }
+
+        # Add columns for each statement type
+        for i, st in enumerate(statement_types):
+            if i < len(code_arrays):
+                codes = code_arrays[i]
+                # Convert list to string representation
+                codes_str = ','.join([str(c) if c is not None else 'N/A' for c in codes])
+                row[f'{st}_codes'] = codes_str
+
+                # Check if this specific statement type is consistent
+                non_none_codes = [c for c in codes if c is not None]
+                if len(non_none_codes) > 0 and None not in codes:
+                    unique_codes = set(non_none_codes)
+                    row[f'{st}_consistent'] = 'Yes' if len(unique_codes) == 1 else 'No'
+                else:
+                    row[f'{st}_consistent'] = 'No'
+            else:
+                row[f'{st}_codes'] = ''
+                row[f'{st}_consistent'] = 'No'
+
+        rows.append(row)
+
+    df = pd.DataFrame(rows)
+
+    # Reorder columns
+    base_cols = ['company_code', 'consistent', 'year_range']
+    st_cols = []
+    for st in statement_types:
+        st_cols.extend([f'{st}_codes', f'{st}_consistent'])
+
+    df = df[base_cols + st_cols]
+
+    df.to_csv(output_file, index=False, encoding='utf-8-sig')
+
+    return None

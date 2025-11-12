@@ -10,6 +10,10 @@ STATEMENT_METADATA: Dict[str, Dict[str, List[str]]] = {
     "IS": {
         "primary": ["Kasumiaruanne skeem 1"],
         "alternatives": ["Kasumiaruanne skeem 2"]
+    },
+    "CF": {
+        "primary": ["Rahavoogude aruanne (kaudne meetod)"],
+        "alternatives": ["Rahavoogude aruanne (otsene meetod)"]
     }
 }
 
@@ -183,3 +187,97 @@ def parse_financial_statement_response(xml_response: ET.Element) -> pd.DataFrame
     pivot.reset_index(inplace=True)
 
     return pivot
+
+def parse_statement_codes_by_year(
+    xml_response: ET.Element,
+    target_year: int,
+    end_year: int,
+    statement_types: List[str]
+) -> Dict[str, List[Optional[str]]]:
+    """
+    Parse statement codes for multiple years and statement types.
+
+    Args:
+        xml_response: XML response from get_annual_reports_list
+        target_year: Starting year
+        end_year: Ending year
+        statement_types: List of statement types (e.g., ["BS", "IS", "CF"])
+
+    Returns:
+        Dictionary with statement_type as key and list of codes (ordered from target_year to end_year) as value
+    """
+    ns = {
+        'ns1': 'http://arireg.x-road.eu/producer/',
+        'soapenv': 'http://schemas.xmlsoap.org/soap/envelope/'
+    }
+
+    entries = xml_response.findall('.//ns1:majandusaasta_aruanded', ns)
+    if not entries:
+        return {st: [] for st in statement_types}
+
+    # Build a mapping: (year, statement_type) -> code
+    year_type_codes: Dict[tuple, Optional[str]] = {}
+
+    for entry in entries:
+        entry_year = _safe_text(entry.find('ns1:aruande_aasta', ns))
+        entry_name = _safe_text(entry.find('ns1:aruande_nimetus', ns))
+        entry_code = _safe_text(entry.find('ns1:aruande_kood', ns))
+
+        if entry_year is None or entry_name is None or entry_code is None:
+            continue
+
+        try:
+            entry_year_int = int(entry_year)
+        except ValueError:
+            continue
+
+        # Skip years outside the range
+        if entry_year_int < end_year or entry_year_int > target_year:
+            continue
+
+        # Determine statement type based on name
+        entry_name_lower = entry_name.lower()
+
+        for statement_type in statement_types:
+            metadata = STATEMENT_METADATA.get(statement_type.upper())
+            if metadata is None:
+                continue
+
+            # Check if this entry matches the statement type
+            is_match = False
+
+            # Check primary names
+            for primary_name in metadata['primary']:
+                if primary_name == entry_name:
+                    is_match = True
+                    break
+
+            # Check alternative names if not matched
+            if not is_match:
+                for alt_name in metadata['alternatives']:
+                    if alt_name == entry_name:
+                        is_match = True
+                        break
+
+            if is_match:
+                key = (entry_year_int, statement_type.upper())
+                # Only store if not already stored (prioritize first match)
+                if key not in year_type_codes:
+                    year_type_codes[key] = entry_code
+
+    # Build result: list of codes ordered from target_year to end_year
+    result = {}
+
+    for statement_type in statement_types:
+        st_upper = statement_type.upper()
+        codes = []
+
+        # Iterate from target_year down to end_year
+        for year in range(target_year, end_year - 1, -1):
+            key = (year, st_upper)
+            code = year_type_codes.get(key)
+            codes.append(code)
+
+        result[st_upper] = codes
+
+    return result
