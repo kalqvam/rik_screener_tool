@@ -10,6 +10,7 @@ from ..add_info.industry_codes import add_industry_classifications
 from ..add_info.company_age import add_company_age
 from ..add_info.emtak_descriptions import add_emtak_descriptions
 from ..add_info.shareholder_data import add_ownership_data
+from ..add_info.geographical_revenue import add_geographical_revenue
 from ..post_processing.scoring import score_companies
 from ..post_processing.filtering import filter_and_rank
 from ..post_processing.company_names import add_company_names
@@ -159,7 +160,16 @@ def _add_enrichment_data_df(config: Dict[str, Any], input_df: pd.DataFrame) -> p
             years=years,
             return_dataframe=True
         )
-    
+
+    if 'geo_revenue' not in skip_steps:
+        log_step("Adding Geographical Revenue Data")
+        current_df = add_geographical_revenue(
+            input_data=current_df,
+            geography_file="geography.csv",
+            years=years,
+            return_dataframe=True
+        )
+
     if 'age' not in skip_steps:
         log_step("Adding Company Age")
         current_df = add_company_age(
@@ -432,7 +442,19 @@ def _add_enrichment_data(config: Dict[str, Any], input_file: str, skip_steps: li
         )
         if result_df is not None:
             current_file = temp_file
-    
+
+    if 'geo_revenue' not in skip_steps:
+        log_step("Adding Geographical Revenue Data")
+        temp_file = f"screening_temp_geo_revenue_{years[-1]}_{years[0]}.csv"
+        result_df = add_geographical_revenue(
+            input_file=current_file,
+            output_file=temp_file,
+            geography_file="geography.csv",
+            years=years
+        )
+        if result_df is not None:
+            current_file = temp_file
+
     if 'age' not in skip_steps:
         log_step("Adding Company Age")
         temp_file = f"screening_temp_age_{years[-1]}_{years[0]}.csv"
