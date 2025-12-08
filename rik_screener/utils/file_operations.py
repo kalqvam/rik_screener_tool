@@ -43,7 +43,7 @@ def safe_read_csv(
         encoding = config.get_default('encoding', 'utf-8')
     
     if separator is None:
-        if any(name in filename for name in ['general_data.csv', 'revenues.csv', 'financials_']):
+        if any(name in filename for name in ['general_data.csv', 'revenues.csv', 'financials_', 'geography.csv']):
             separator = ';'
     
     try:
