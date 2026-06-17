@@ -8,17 +8,22 @@ from .endpoints import (
     get_annual_reports_list,
     get_company_basic_info,
     get_financial_statement_details,
+    get_beneficial_owners,
+    get_representation_rights,
 )
 from .data_processors import (
     create_latest_reports_dataframe,
     extract_statement_code,
     parse_annual_reports_response,
+    parse_beneficial_owners_response,
     parse_company_info_response,
     parse_financial_statement_response,
+    parse_representation_rights_response,
     parse_statement_codes_by_year,
     parse_consolidation_status_by_year,
 )
 from .utils import format_progress, validate_company_codes
+from ..utils import log_info, log_warning, log_error
 
 def get_latest_reports_info(
     company_codes: List[str],
@@ -33,15 +38,15 @@ def get_latest_reports_info(
     valid_codes = validate_company_codes(company_codes)
     
     if not valid_codes:
-        print("No valid company codes provided")
+        log_warning("No valid company codes provided")
         return pd.DataFrame()
-    
-    print(f"Processing {len(valid_codes)} companies with rate limit {rate_limit}/min")
+
+    log_info(f"Processing {len(valid_codes)} companies with rate limit {rate_limit}/min")
     
     reports_data = []
     
     for i, company_code in enumerate(valid_codes, 1):
-        print(format_progress(i, len(valid_codes), "Fetching reports"))
+        log_info(format_progress(i, len(valid_codes), "Fetching reports"))
         
         xml_response = get_annual_reports_list(company_code)
         
@@ -50,17 +55,17 @@ def get_latest_reports_info(
             if report_info:
                 reports_data.append(report_info)
         else:
-            print(f"Failed to get data for company {company_code}")
-    
+            log_warning(f"Failed to get data for company {company_code}")
+
     names_data = None
-    
+
     if include_names and reports_data:
-        print(f"\nFetching company names...")
+        log_info("Fetching company names...")
         names_data = {}
         
         for i, report in enumerate(reports_data, 1):
             company_code = report['company_code']
-            print(format_progress(i, len(reports_data), "Fetching names"))
+            log_info(format_progress(i, len(reports_data), "Fetching names"))
             
             xml_response = get_company_basic_info(company_code)
             
@@ -71,7 +76,7 @@ def get_latest_reports_info(
     
     df = create_latest_reports_dataframe(reports_data, names_data)
 
-    print(f"\nCompleted: {len(df)} companies processed successfully")
+    log_info(f"Completed: {len(df)} companies processed successfully")
 
     return df
 
@@ -114,13 +119,13 @@ def _collect_company_statements(
 
     xml_list = get_annual_reports_list(company_code)
     if xml_list is None:
-        print(f"Failed to retrieve annual reports list for {company_code}")
+        log_warning(f"Failed to retrieve annual reports list for {company_code}")
         return None
 
     try:
         statement_code = extract_statement_code(xml_list, years, statement_type)
     except ValueError as exc:
-        print(f"{company_code}: {exc}")
+        log_warning(f"{company_code}: {exc}")
         return None
 
     combined_frame: Optional[pd.DataFrame] = None
@@ -129,7 +134,7 @@ def _collect_company_statements(
         statement_xml = get_financial_statement_details(company_code, statement_code, year)
 
         if statement_xml is None:
-            print(f"{company_code}: failed to retrieve {statement_type} for {year}")
+            log_warning(f"{company_code}: failed to retrieve {statement_type} for {year}")
             continue
 
         year_frame = parse_financial_statement_response(statement_xml)
@@ -146,13 +151,13 @@ def _collect_company_statements(
         combined_frame = _merge_year_frames(combined_frame, year_frame)
 
     if combined_frame is None or combined_frame.empty:
-        print(f"{company_code}: no statement data retrieved")
+        log_warning(f"{company_code}: no statement data retrieved")
         return None
 
     value_frame = combined_frame.drop(columns=['line_name'], errors='ignore')
 
     if value_frame.empty:
-        print(f"{company_code}: statement contains no numeric values")
+        log_warning(f"{company_code}: statement contains no numeric values")
         return None
 
     line_names = combined_frame['line_name'] if 'line_name' in combined_frame else pd.Series(dtype=object)
@@ -196,16 +201,16 @@ def get_financial_statements(
     valid_codes = validate_company_codes(company_codes)
 
     if not valid_codes:
-        print("No valid company codes provided")
+        log_warning("No valid company codes provided")
         return pd.DataFrame()
 
-    print(f"Processing {len(valid_codes)} companies for {statement_type.upper()} statements")
+    log_info(f"Processing {len(valid_codes)} companies for {statement_type.upper()} statements")
 
     value_frames: List[pd.DataFrame] = []
     line_name_series: List[pd.Series] = []
 
     for index, company_code in enumerate(valid_codes, 1):
-        print(format_progress(index, len(valid_codes), "Statements"))
+        log_info(format_progress(index, len(valid_codes), "Statements"))
 
         result = _collect_company_statements(company_code, years, statement_type)
 
@@ -218,7 +223,7 @@ def get_financial_statements(
         line_name_series.append(names.rename(company_code))
 
     if not value_frames:
-        print("No statement data collected")
+        log_warning("No statement data collected")
         return pd.DataFrame()
 
     combined_values = pd.concat(value_frames, axis=1, sort=True)
@@ -275,7 +280,7 @@ def check_statement_consistency(
     valid_codes = validate_company_codes(company_codes)
 
     if not valid_codes:
-        print("No valid company codes provided")
+        log_warning("No valid company codes provided")
         return {}
 
     # Validate statement types
@@ -283,29 +288,29 @@ def check_statement_consistency(
     for st in statement_types:
         st_upper = st.upper()
         if st_upper not in ["BS", "IS", "CF"]:
-            print(f"Warning: Invalid statement type '{st}', skipping. Valid types: BS, IS, CF")
+            log_warning(f"Invalid statement type '{st}', skipping. Valid types: BS, IS, CF")
             continue
         valid_statement_types.append(st_upper)
 
     if not valid_statement_types:
-        print("No valid statement types provided")
+        log_warning("No valid statement types provided")
         return {}
 
-    print(f"Checking statement consistency for {len(valid_codes)} companies")
-    print(f"Year range: {target_year} to {end_year}")
-    print(f"Statement types: {', '.join(valid_statement_types)}")
-    print(f"Rate limit: {rate_limit}/min")
+    log_info(f"Checking statement consistency for {len(valid_codes)} companies")
+    log_info(f"Year range: {target_year} to {end_year}")
+    log_info(f"Statement types: {', '.join(valid_statement_types)}")
+    log_info(f"Rate limit: {rate_limit}/min")
 
     results = {}
 
     for i, company_code in enumerate(valid_codes, 1):
-        print(format_progress(i, len(valid_codes), "Checking consistency"))
+        log_info(format_progress(i, len(valid_codes), "Checking consistency"))
 
         xml_response = get_annual_reports_list(company_code)
 
         if xml_response is None:
-            print(f"Failed to get data for company {company_code}")
-            results[company_code] = ("No", [[] for _ in valid_statement_types], "Non-consolidated")
+            log_warning(f"Failed to get data for company {company_code}")
+            results[company_code] = ("—", [[] for _ in valid_statement_types], "—")
             continue
 
         # Parse statement codes by year
@@ -357,7 +362,7 @@ def check_statement_consistency(
         answer = "Yes" if is_consistent else "No"
         results[company_code] = (answer, result_arrays, consolidation_status)
 
-    print(f"\nCompleted: {len(results)} companies processed")
+    log_info(f"Completed: {len(results)} companies processed")
 
     # Save to CSV if output_file is specified
     if output_file:
@@ -368,7 +373,7 @@ def check_statement_consistency(
             end_year,
             output_file
         )
-        print(f"Results saved to {output_file}")
+        log_info(f"Results saved to {output_file}")
 
     return results
 
@@ -505,4 +510,80 @@ def _save_consistency_results_to_csv(
 
     df.to_csv(output_file, index=False, encoding='utf-8-sig')
 
-    return None
+
+def get_company_beneficial_owners(
+    company_codes: List[str],
+    username: str,
+    password: str,
+    active_only: bool = True,
+    rate_limit: int = 20,
+) -> List[Dict]:
+    """
+    Fetch beneficial owners (tegelikud kasusaajad) for one or more companies.
+
+    Returns a list of dicts, one per company, each containing summary counts
+    and a list of beneficial owner dicts. Companies that fail are omitted with a warning.
+    """
+    set_api_config(username, password, rate_limit)
+    valid_codes = validate_company_codes(company_codes)
+
+    if not valid_codes:
+        log_warning("No valid company codes provided")
+        return []
+
+    log_info(f"Fetching beneficial owners for {len(valid_codes)} companies")
+
+    results = []
+    for i, company_code in enumerate(valid_codes, 1):
+        log_info(format_progress(i, len(valid_codes), "Beneficial owners"))
+
+        xml_response = get_beneficial_owners(company_code, active_only=active_only)
+        if xml_response is None:
+            log_warning(f"Failed to get beneficial owners data for {company_code}")
+            continue
+
+        parsed = parse_beneficial_owners_response(xml_response, company_code)
+        if parsed is not None:
+            results.append(parsed)
+
+    log_info(f"Completed: {len(results)} companies processed")
+    return results
+
+
+def get_company_representation(
+    company_codes: List[str],
+    username: str,
+    password: str,
+    rate_limit: int = 20,
+) -> List[Dict]:
+    """
+    Fetch rights of representation for one or more companies (esindus_v1).
+
+    Returns a list of dicts, one per company, each containing:
+      company_code, company_name, status, legal_form, exceptions, persons (list of dicts).
+    Companies that fail are omitted with a warning logged.
+    """
+    set_api_config(username, password, rate_limit)
+    valid_codes = validate_company_codes(company_codes)
+
+    if not valid_codes:
+        log_warning("No valid company codes provided")
+        return []
+
+    log_info(f"Fetching representation rights for {len(valid_codes)} companies")
+
+    results = []
+    for i, company_code in enumerate(valid_codes, 1):
+        log_info(format_progress(i, len(valid_codes), "Representation rights"))
+
+        xml_response = get_representation_rights(company_code)
+        if xml_response is None:
+            log_warning(f"Failed to get representation data for {company_code}")
+            continue
+
+        parsed = parse_representation_rights_response(xml_response, company_code)
+        if parsed is not None:
+            results.append(parsed)
+
+    log_info(f"Completed: {len(results)} companies processed")
+    return results

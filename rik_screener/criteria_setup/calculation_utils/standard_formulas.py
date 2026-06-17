@@ -11,6 +11,7 @@ def get_standard_formulas(years: List[int] = None) -> Dict[str, str]:
     
     for year in years:
         formulas.update({
+            f"ebitda_{year}": ebitda(year),
             f"ebitda_margin_{year}": ebitda_margin(year),
             f"roe_{year}": roe(year),
             f"roe_single_{year}": roe(year, binary=1),
@@ -39,6 +40,10 @@ def get_standard_formulas(years: List[int] = None) -> Dict[str, str]:
         formulas[f"revenue_cagr_{start_year}_to_{end_year}"] = revenue_cagr(start_year, end_year)
     
     return formulas
+
+
+def ebitda(year: int) -> str:
+    return f'"Ärikasum (kahjum)_{year}" + abs("Põhivarade kulum ja väärtuse langus_{year}")'
 
 
 def ebitda_margin(year: int) -> str:
@@ -80,10 +85,10 @@ def roa(year: int, binary: int = 0) -> str:
 
 def employee_efficiency(year: int, binary: int = 0) -> str:
     if binary == 1:
-        return f'"Müügitulu_{year}" / "Töötajate keskmine arv taandatud täistööajale_{year}"'
+        return f'"Müügitulu_{year}" / "Töötajate keskmine arv taandatuna täistööajale_{year}"'
     else:
         prev_year = year - 1
-        return f'"Müügitulu_{year}" / (("Töötajate keskmine arv taandatud täistööajale_{year}" + "Töötajate keskmine arv taandatud täistööajale_{prev_year}") / 2)'
+        return f'"Müügitulu_{year}" / (("Töötajate keskmine arv taandatuna täistööajale_{year}" + "Töötajate keskmine arv taandatuna täistööajale_{prev_year}") / 2)'
 
 
 def cash_ratio(year: int) -> str:
@@ -102,70 +107,3 @@ def labour_ratio(year: int) -> str:
     return f'abs("Tööjõukulud_{year}") / "Müügitulu_{year}"'
 
 
-def get_available_formulas() -> List[str]:
-    return [
-        'ebitda_margin',
-        'revenue_growth', 
-        'revenue_cagr',
-        'asset_turnover',
-        'roe',
-        'roa', 
-        'employee_efficiency',
-        'cash_ratio',
-        'current_ratio',
-        'debt_to_equity',
-        'labour_ratio'
-    ]
-
-
-def build_custom_formula_set(
-    years: List[int],
-    include_growth: bool = True,
-    include_efficiency: bool = True,
-    include_liquidity: bool = True,
-    include_leverage: bool = True,
-    use_averages: bool = True
-) -> Dict[str, str]:
-    formulas = {}
-    years = sorted(years, reverse=True)
-    binary = 0 if use_averages else 1
-    suffix = "" if use_averages else "_single"
-    
-    for year in years:
-        formulas[f"ebitda_margin_{year}"] = ebitda_margin(year)
-    
-    if include_efficiency:
-        for year in years:
-            formulas.update({
-                f"roe{suffix}_{year}": roe(year, binary),
-                f"roa{suffix}_{year}": roa(year, binary),
-                f"asset_turnover{suffix}_{year}": asset_turnover(year, binary),
-                f"employee_efficiency{suffix}_{year}": employee_efficiency(year, binary),
-            })
-    
-    if include_liquidity:
-        for year in years:
-            formulas.update({
-                f"cash_ratio_{year}": cash_ratio(year),
-                f"current_ratio_{year}": current_ratio(year),
-            })
-    
-    if include_leverage:
-        for year in years:
-            formulas.update({
-                f"debt_to_equity_{year}": debt_to_equity(year),
-                f"labour_ratio_{year}": labour_ratio(year),
-            })
-    
-    if include_growth and len(years) >= 2:
-        for i in range(len(years)-1):
-            to_year = years[i]
-            from_year = years[i+1]
-            formulas[f"revenue_growth_{from_year}_to_{to_year}"] = revenue_growth(from_year, to_year)
-        
-        if len(years) >= 3:
-            start_year = years[-1]
-            end_year = years[0]
-            formulas[f"revenue_cagr_{start_year}_to_{end_year}"] = revenue_cagr(start_year, end_year)
-    
-    return formulas

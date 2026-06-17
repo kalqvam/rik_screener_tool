@@ -1,3 +1,4 @@
+import re
 import pandas as pd
 from typing import Dict, List, Optional, Union
 
@@ -43,10 +44,12 @@ def calculate_ratios(
             formulas = get_standard_formulas(years)
         
         if not formulas:
-            formulas = {
+            default_formulas = {
                 f"EBITDA_Margin_{years[0]}": f'("Ärikasum (kahjum)_{years[0]}" + abs("Põhivarade kulum ja väärtuse langus_{years[0]}")) / "Müügitulu_{years[0]}"',
-                "Revenue_Growth": f'("Müügitulu_{years[0]}" - "Müügitulu_{years[1]}") / "Müügitulu_{years[1]}"',
             }
+            if len(years) >= 2:
+                default_formulas["Revenue_Growth"] = f'("Müügitulu_{years[0]}" - "Müügitulu_{years[1]}") / "Müügitulu_{years[1]}"'
+            formulas = default_formulas
     
     all_formula_columns = []
     for formula in formulas.values():
@@ -57,11 +60,8 @@ def calculate_ratios(
     if financial_items is None:
         financial_items = set()
         for col in all_formula_columns:
-            if '_20' in col:
-                base_col = col.split('_20')[0]
-                financial_items.add(base_col)
-            else:
-                financial_items.add(col)
+            base_col = re.sub(r'_\d{4}$', '', col)
+            financial_items.add(base_col)
         financial_items = list(financial_items)
     
     log_info(f"Financial items to retrieve: {financial_items}")
@@ -90,7 +90,7 @@ def calculate_ratios(
     result = flag_investment_vehicles(result, years, valid_formulas)
     
     if output_file and not return_dataframe:
-        if safe_write_csv(result, output_file):
+        if safe_write_csv(result, output_file, encoding='utf-8'):
             log_info(f"Saved {len(result)} companies with ratios to {output_file}")
         else:
             log_error(f"Failed to save results to {output_file}")

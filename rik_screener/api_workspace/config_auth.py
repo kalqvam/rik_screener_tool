@@ -18,7 +18,7 @@ class APIConfig:
     def wait_for_rate_limit(self):
         current_time = time.time()
         time_since_last = current_time - self.last_request_time
-        wait_time = (60.0 / self.rate_limit) + 0.075
+        wait_time = 60.0 / self.rate_limit
         
         if time_since_last < wait_time:
             sleep_duration = wait_time - time_since_last

@@ -106,7 +106,7 @@ def merge_multiple_years(
 
     if not merged_data.empty:
         if output_file and not return_dataframe:
-            if safe_write_csv(merged_data, output_file):
+            if safe_write_csv(merged_data, output_file, encoding='utf-8'):
                 log_info(f"Saved {len(merged_data)} companies with multi-year data to {output_file}")
             else:
                 log_error(f"Failed to save merged data to {output_file}")

@@ -32,7 +32,7 @@ class ProgressLogger:
         return formatted
     
     def _write_log(self, formatted_message: str):
-        print(formatted_message)
+        print(formatted_message, file=sys.stderr)
     
     def log(self, level: LogLevel, message: str):
         formatted = self._format_message(level, message)

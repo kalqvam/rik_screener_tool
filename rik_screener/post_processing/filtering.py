@@ -49,6 +49,9 @@ def filter_and_rank(
                 log_warning(f"Filter column '{column}' not found in data. Skipping this filter")
                 continue
 
+            if min_val is not None and max_val is not None and min_val > max_val:
+                log_warning(f"Filter on '{column}': min ({min_val}) > max ({max_val}) — will produce empty results")
+
             before_filter = len(companies_df)
 
             if min_val is not None:
@@ -70,18 +73,18 @@ def filter_and_rank(
 
             if companies_df.empty:
                 log_warning(f"No companies remain after applying filter {filter_idx+1} on {column}")
-                return None
+                return companies_df
 
     total_filtered = original_count - len(companies_df)
     log_info(f"Total filtered: {total_filtered} companies")
     log_info(f"Remaining companies: {len(companies_df)}")
 
-    if sort_column not in companies_df.columns:
-        log_error(f"Sort column '{sort_column}' not found in data")
-        return None
-
-    companies_df = companies_df.sort_values(by=sort_column, ascending=ascending)
-    log_info(f"Sorted companies by {sort_column} ({'ascending' if ascending else 'descending'})")
+    if sort_column is not None:
+        if sort_column not in companies_df.columns:
+            log_warning(f"Sort column '{sort_column}' not found in data — skipping sort")
+        else:
+            companies_df = companies_df.sort_values(by=sort_column, ascending=ascending)
+            log_info(f"Sorted companies by {sort_column} ({'ascending' if ascending else 'descending'})")
 
     if top_n is not None and top_n > 0:
         companies_df = companies_df.head(top_n)

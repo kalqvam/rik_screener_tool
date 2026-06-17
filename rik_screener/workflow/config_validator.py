@@ -11,9 +11,10 @@ def validate_config(config: Dict[str, Any]) -> None:
     _validate_skip_steps(config.get('skip_steps'))
     _validate_pipeline_mode(config.get('use_dataframe_pipeline'))
     _validate_formulas(config)
-    _validate_scoring_config(config.get('scoring_config'))
     _validate_financial_filters(config.get('financial_filters'))
     _validate_ownership_filters(config.get('ownership_filters'))
+    _validate_industry_codes_filter(config.get('industry_codes_filter'))
+    _validate_geography_filters(config.get('geography_filters'))
 
 
 def _validate_years(years):
@@ -38,7 +39,7 @@ def _validate_skip_steps(skip_steps):
     if skip_steps is not None:
         if not isinstance(skip_steps, list):
             raise ValueError("Skip steps must be a list")
-        valid_steps = ["industry", "age", "emtak", "ownership"]
+        valid_steps = ["industry", "age", "emtak", "ownership", "geography"]
         invalid_steps = [step for step in skip_steps if step not in valid_steps]
         if invalid_steps:
             raise ValueError(f"Invalid skip steps: {invalid_steps}. Valid options: {valid_steps}")
@@ -72,8 +73,8 @@ def _validate_formulas(config):
 
 def _validate_standard_formulas(standard_formulas, years):
     valid_formula_types = [
-        'ebitda_margin', 'roe', 'roa', 'asset_turnover', 'employee_efficiency',
-        'cash_ratio', 'current_ratio', 'debt_to_equity', 'labour_ratio', 
+        'ebitda', 'ebitda_margin', 'roe', 'roa', 'asset_turnover', 'employee_efficiency',
+        'cash_ratio', 'current_ratio', 'debt_to_equity', 'labour_ratio',
         'revenue_growth', 'revenue_cagr'
     ]
     
@@ -135,14 +136,6 @@ def _get_generated_formula_names(standard_formulas, years):
     return names
 
 
-def _validate_scoring_config(scoring_config):
-    if scoring_config is not None:
-        from ..post_processing.scoring_config import validate_scoring_config
-        errors = validate_scoring_config(scoring_config)
-        if errors:
-            raise ValueError(f"Scoring config validation errors: {errors}")
-
-
 def _validate_financial_filters(financial_filters):
     if financial_filters is not None:
         if not isinstance(financial_filters, list):
@@ -158,3 +151,35 @@ def _validate_ownership_filters(ownership_filters):
     if ownership_filters is not None:
         if not isinstance(ownership_filters, dict):
             raise ValueError("Ownership filters must be a dictionary")
+
+
+def _validate_industry_codes_filter(industry_codes_filter):
+    if industry_codes_filter is not None:
+        if not isinstance(industry_codes_filter, list):
+            raise ValueError("industry_codes_filter must be a list of strings")
+        if not all(isinstance(c, str) for c in industry_codes_filter):
+            raise ValueError("industry_codes_filter entries must be strings")
+
+
+def _validate_geography_filters(geography_filters):
+    if geography_filters is None:
+        return
+    if not isinstance(geography_filters, dict):
+        raise ValueError("geography_filters must be a dictionary")
+    valid_keys = {"min_export_share", "max_domestic_share", "export_countries"}
+    unknown = set(geography_filters) - valid_keys
+    if unknown:
+        raise ValueError(f"Unknown geography_filters keys: {unknown}. Valid: {valid_keys}")
+    for k in ("min_export_share", "max_domestic_share"):
+        v = geography_filters.get(k)
+        if v is not None:
+            if not isinstance(v, (int, float)):
+                raise ValueError(f"geography_filters['{k}'] must be a number")
+            if not (0.0 <= v <= 1.0):
+                raise ValueError(f"geography_filters['{k}'] must be between 0.0 and 1.0")
+    ec = geography_filters.get("export_countries")
+    if ec is not None:
+        if not isinstance(ec, list):
+            raise ValueError("geography_filters['export_countries'] must be a list")
+        if not all(isinstance(c, str) for c in ec):
+            raise ValueError("geography_filters['export_countries'] entries must be strings")

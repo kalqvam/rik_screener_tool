@@ -49,7 +49,7 @@ def add_company_age(
     
     log_info(f"Loaded legal data for {len(legal_df)} companies")
     
-    legal_df['ariregistri_kood'] = legal_df['ariregistri_kood'].astype(str)
+    legal_df['ariregistri_kood'] = legal_df['ariregistri_kood'].astype(str).str.strip()
     
     legal_df['registration_date'] = pd.to_datetime(
         legal_df['ettevotja_esmakande_kpv'], 
@@ -65,7 +65,7 @@ def add_company_age(
     
     legal_dict = dict(zip(legal_df['ariregistri_kood'], legal_df['company_age_years']))
     
-    companies_df['company_code_str'] = companies_df['company_code'].astype(str)
+    companies_df['company_code_str'] = companies_df['company_code'].astype(str).str.strip()
     companies_df['company_age_years'] = companies_df['company_code_str'].map(legal_dict)
     companies_df = companies_df.drop(columns=['company_code_str'])
     
@@ -76,7 +76,7 @@ def add_company_age(
         log_warning("No companies were matched with legal data")
     
     if output_file and not return_dataframe:
-        if safe_write_csv(companies_df, output_file):
+        if safe_write_csv(companies_df, output_file, encoding='utf-8'):
             log_info(f"Saved {len(companies_df)} companies with age data to {output_file}")
         else:
             log_error(f"Failed to save results to {output_file}")

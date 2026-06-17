@@ -1,5 +1,6 @@
 import re
 from typing import List
+from ..utils import log_warning
 
 def validate_company_code(code: str) -> bool:
     if not isinstance(code, str):
@@ -29,7 +30,7 @@ def validate_company_codes(codes: List[str]) -> List[str]:
             invalid_codes.append(code)
     
     if invalid_codes:
-        print(f"Warning: Invalid company codes found and will be skipped: {invalid_codes}")
+        log_warning(f"Invalid company codes found and will be skipped: {invalid_codes}")
     
     return valid_codes
 

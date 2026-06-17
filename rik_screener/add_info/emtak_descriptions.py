@@ -39,7 +39,7 @@ def add_emtak_descriptions(
     log_info(f"Available columns: {companies_df.columns.tolist()}")
     
     log_info(f"Loading EMTAK codes from {emtak_file}")
-    emtak_df = safe_read_csv(emtak_file, header=None)
+    emtak_df = safe_read_csv(emtak_file, header=None, separator=',')
     if emtak_df is None:
         log_error(f"Failed to load EMTAK file {emtak_file}")
         return companies_df
@@ -75,7 +75,7 @@ def add_emtak_descriptions(
         
         log_info(f"Processing EMTAK descriptions for year {year}")
         
-        companies_df[industry_code_col] = companies_df[industry_code_col].fillna('').astype(str)
+        companies_df[industry_code_col] = companies_df[industry_code_col].fillna('').astype(str).str.strip()
         companies_df[industry_code_col] = companies_df[industry_code_col].apply(
             lambda x: x.split('.')[0] if x and '.' in x and x != 'nan' else x
         )
@@ -132,7 +132,7 @@ def add_emtak_descriptions(
         log_info(f"Overall mapping rate: {mapping_rate:.1f}%")
     
     if output_file and not return_dataframe:
-        if safe_write_csv(companies_df, output_file):
+        if safe_write_csv(companies_df, output_file, encoding='utf-8'):
             log_info(f"Saved {len(companies_df)} companies with EMTAK descriptions to {output_file}")
         else:
             log_error(f"Failed to save results to {output_file}")

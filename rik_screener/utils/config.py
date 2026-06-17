@@ -14,13 +14,16 @@ class ConfigManager:
         if env_path:
             return env_path
 
-        return "/content/drive/MyDrive/YOUR_FOLDER"
+        raise ValueError(
+            "No base path configured. Set the RIK_SCREENER_PATH environment variable "
+            "or pass base_path to ConfigManager()."
+        )
     
     def _load_defaults(self) -> Dict[str, Any]:
         return {
             'years': [2023, 2022, 2021],
             'legal_forms': ["AS", "OÜ"],
-            'encoding': 'utf-8',
+            'encoding': 'utf-8-sig',
             'csv_separator': ';',
             'chunk_size': 500000,
             'decimal_separator': '.',
@@ -31,7 +34,7 @@ class ConfigManager:
                 "Põhivarade kulum ja väärtuse langus",
                 "Aruandeaasta kasum (kahjum)",
                 "Varad",
-                "Töötajate keskmine arv taandatud täistööajale",
+                "Töötajate keskmine arv taandatuna täistööajale",
                 "Raha",
                 "Lühiajalised kohustised",
                 "Pikaajalised kohustised",
@@ -54,7 +57,9 @@ class ConfigManager:
     def validate_base_path(self) -> bool:
         try:
             return os.path.exists(self.base_path) and os.path.isdir(self.base_path)
-        except Exception:
+        except Exception as e:
+            from .logging import log_error
+            log_error(f"Failed to validate base path '{self.base_path}': {e}")
             return False
     
     def get_default(self, key: str, fallback: Any = None) -> Any:
@@ -71,13 +76,16 @@ class ConfigManager:
         try:
             from google.colab import drive
             drive.mount('/content/drive')
-            print("Google Drive mounted successfully")
+            from .logging import log_info
+            log_info("Google Drive mounted successfully")
             return True
         except ImportError:
-            print("Running outside of Google Colab")
+            from .logging import log_info
+            log_info("Running outside of Google Colab")
             return True
         except Exception as e:
-            print(f"Failed to mount Google Drive: {e}")
+            from .logging import log_error
+            log_error(f"Failed to mount Google Drive: {e}")
             return False
 
 _config_instance = None

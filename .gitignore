@@ -172,3 +172,27 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+# Claude Code session data — transcripts, memory, local settings
+.claude/
+
+# RIK API credentials — never commit this file
+credentials.txt
+
+# MCP server local config — contains personal paths; copy from .mcp.json.example
+.mcp.json
+
+# RIK / EMTA open data files — large, downloaded separately via download_data.py
+# These live outside the repo by convention; entries here guard against accidents.
+ettevotja_rekvisiidid__lihtandmed.csv
+ettevotja_rekvisiidid__osanikud.json
+1.aruannete_yldandmed_kuni_*.csv
+2.EMTAK_myygitulu_kuni_*.csv
+3.myygitulu_geograafiline_kuni_*.csv
+4.*_aruannete_elemendid_kuni_*.csv
+tasutud_maksud_kaesolev_aasta.csv
+tasutud_maksud_varasemad_aastad.csv
+
+# Test output
+test_output/
+statement_consistency_results.csv

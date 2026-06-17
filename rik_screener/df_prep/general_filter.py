@@ -2,7 +2,6 @@ import pandas as pd
 from typing import List, Optional, Union
 
 from ..utils import (
-    get_config,
     safe_read_csv,
     safe_write_csv,
     log_info,
@@ -19,15 +18,6 @@ def filter_companies(
 ) -> Union[pd.DataFrame, None]:
     log_info(f"Reading general company data for {year}")
 
-    config = get_config()
-    
-    header_data = safe_read_csv("general_data.csv", nrows=0)
-    if header_data is None:
-        log_error("Failed to read general_data.csv header")
-        return None
-
-    log_info(f"Available columns in general_data.csv: {header_data.columns.tolist()}")
-
     column_mapping = {
         "report_id": "report_id",
         "registrikood": "registrikood",
@@ -36,15 +26,15 @@ def filter_companies(
         "staatus": "staatus"
     }
 
-    available_columns = header_data.columns.tolist()
-    usecols = [col for expected, col in column_mapping.items() if col in available_columns]
-
-    general_data = safe_read_csv("general_data.csv", usecols=usecols)
+    expected_cols = set(column_mapping.values())
+    general_data = safe_read_csv("general_data.csv", usecols=lambda c: c.strip() in expected_cols)
     if general_data is None:
         log_error("Failed to read general_data.csv")
         return None
 
-    inverse_mapping = {v: k for k, v in column_mapping.items() if v in usecols}
+    log_info(f"Available columns in general_data.csv: {general_data.columns.tolist()}")
+
+    inverse_mapping = {v: k for k, v in column_mapping.items() if v in general_data.columns}
     general_data = general_data.rename(columns=inverse_mapping)
 
     filtered_companies = general_data[
@@ -68,7 +58,7 @@ def filter_companies(
     filtered_companies = filtered_companies.drop(columns=["staatus"])
 
     if output_file and not return_dataframe:
-        if safe_write_csv(filtered_companies, output_file):
+        if safe_write_csv(filtered_companies, output_file, encoding='utf-8'):
             log_info(f"Saved {len(filtered_companies)} filtered companies to {output_file}")
         else:
             log_error(f"Failed to save filtered companies to {output_file}")

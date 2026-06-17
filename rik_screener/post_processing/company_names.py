@@ -44,10 +44,11 @@ def add_company_names(
         return companies_df
     
     legal_df = legal_df[['ariregistri_kood', 'nimi']].copy()
-    
+    legal_df = legal_df.dropna(subset=['ariregistri_kood', 'nimi'])
+
     log_info(f"Loaded legal data for {len(legal_df)} companies")
-    
-    legal_df['ariregistri_kood'] = legal_df['ariregistri_kood'].astype(str)
+
+    legal_df['ariregistri_kood'] = legal_df['ariregistri_kood'].astype(str).str.strip()
     legal_df['nimi'] = legal_df['nimi'].astype(str)
     
     if legal_df['ariregistri_kood'].duplicated().any():
@@ -57,7 +58,7 @@ def add_company_names(
     
     legal_dict = dict(zip(legal_df['ariregistri_kood'], legal_df['nimi']))
     
-    companies_df['company_code_str'] = companies_df['company_code'].astype(str)
+    companies_df['company_code_str'] = companies_df['company_code'].astype(str).str.strip()
     companies_df['company_name'] = companies_df['company_code_str'].map(legal_dict)
     companies_df = companies_df.drop(columns=['company_code_str'])
     

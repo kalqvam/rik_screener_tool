@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "rik-screener": {
+      "command": "python",
+      "args": ["-m", "rik_screener.mcp_server"],
+      "cwd": "/path/to/rik_screener_tool",
+      "env": {
+        "RIK_SCREENER_PATH": "/path/to/your/data/folder",
+        "RIK_USERNAME": "${RIK_USERNAME}",
+        "RIK_PASSWORD": "${RIK_PASSWORD}"
+      }
+    }
+  }
+}

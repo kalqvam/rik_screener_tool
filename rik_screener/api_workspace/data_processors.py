@@ -1,20 +1,12 @@
 import pandas as pd
 import xml.etree.ElementTree as ET
 from typing import List, Optional, Dict, Any, Iterable
+from ..utils import log_error
 
-STATEMENT_METADATA: Dict[str, Dict[str, List[str]]] = {
-    "BS": {
-        "primary": ["Bilanss"],
-        "alternatives": []
-    },
-    "IS": {
-        "primary": ["Kasumiaruanne skeem 1"],
-        "alternatives": ["Kasumiaruanne skeem 2"]
-    },
-    "CF": {
-        "primary": ["Rahavoogude aruanne (kaudne meetod)"],
-        "alternatives": ["Rahavoogude aruanne (otsene meetod)"]
-    }
+STATEMENT_SEARCH_MAP: Dict[str, str] = {
+    'BS': 'bilanss',
+    'IS': 'kasum',
+    'CF': 'raha',
 }
 
 def _safe_text(element: Optional[ET.Element]) -> Optional[str]:
@@ -48,8 +40,8 @@ def parse_annual_reports_response(xml_response: ET.Element, company_code: str) -
             'period_end': majandusaasta_lopp.text if majandusaasta_lopp is not None else None
         }
         
-    except Exception as e:
-        print(f"Error parsing annual reports for {company_code}: {e}")
+    except (ET.ParseError, AttributeError, KeyError) as e:
+        log_error(f"Error parsing annual reports for {company_code}: {e}")
         return None
 
 def parse_company_info_response(xml_response: ET.Element, company_code: str) -> Optional[str]:
@@ -66,8 +58,8 @@ def parse_company_info_response(xml_response: ET.Element, company_code: str) -> 
         
         return None
         
-    except Exception as e:
-        print(f"Error parsing company info for {company_code}: {e}")
+    except (ET.ParseError, AttributeError, KeyError) as e:
+        log_error(f"Error parsing company info for {company_code}: {e}")
         return None
 
 def create_latest_reports_dataframe(reports_data: List[Dict[str, Any]], names_data: Optional[Dict[str, str]] = None) -> pd.DataFrame:
@@ -90,8 +82,8 @@ def extract_statement_code(
         'soapenv': 'http://schemas.xmlsoap.org/soap/envelope/'
     }
 
-    metadata = STATEMENT_METADATA.get(statement_type.upper())
-    if metadata is None:
+    search_substring = STATEMENT_SEARCH_MAP.get(statement_type.upper())
+    if search_substring is None:
         raise ValueError(f"Unsupported statement type '{statement_type}'")
 
     entries = xml_response.findall('.//ns1:majandusaasta_aruanded', ns)
@@ -101,8 +93,7 @@ def extract_statement_code(
     codes: List[str] = []
 
     for year in years:
-        primary_code: Optional[str] = None
-        alternative_code: Optional[str] = None
+        matched_code: Optional[str] = None
 
         for entry in entries:
             entry_year = _safe_text(entry.find('ns1:aruande_aasta', ns))
@@ -120,17 +111,12 @@ def extract_statement_code(
             if entry_year_int != year:
                 continue
 
-            if entry_name in metadata['primary']:
-                primary_code = entry_code
+            if search_substring in entry_name.lower():
+                matched_code = entry_code
                 break
 
-            if entry_name in metadata['alternatives']:
-                alternative_code = entry_code
-
-        if primary_code is not None:
-            codes.append(primary_code)
-        elif alternative_code is not None:
-            codes.append(alternative_code)
+        if matched_code is not None:
+            codes.append(matched_code)
         else:
             raise ValueError(f"No {statement_type.upper()} code found for year {year}")
 
@@ -188,6 +174,127 @@ def parse_financial_statement_response(xml_response: ET.Element) -> pd.DataFrame
 
     return pivot
 
+def parse_beneficial_owners_response(
+    xml_response: ET.Element,
+    company_code: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Parse the tegelikudKasusaajad_v2 response for a single company.
+
+    Returns a dict with summary counts and a list of beneficial owner dicts, or None on error.
+    """
+    try:
+        ns = {
+            "ns1": "http://arireg.x-road.eu/producer/",
+            "soapenv": "http://schemas.xmlsoap.org/soap/envelope/",
+        }
+
+        kasusaajad_el = xml_response.find(".//ns1:kasusaajad", ns)
+        if kasusaajad_el is None:
+            return None
+
+        def _bool(el) -> Optional[bool]:
+            t = _safe_text(el)
+            if t is None:
+                return None
+            t_lower = t.lower().strip()
+            if t_lower in ("true", "1", "jah", "yes"):
+                return True
+            if t_lower in ("false", "0", "ei", "no"):
+                return False
+            return None  # unrecognised value → unknown rather than silently False
+
+        total = _safe_text(kasusaajad_el.find("ns1:kasusaajate_arv_kokku", ns))
+        hidden = _safe_text(kasusaajad_el.find("ns1:peidetud_kasusaajate_arv", ns))
+        discrepancy_absence = _bool(kasusaajad_el.find("ns1:lahknevusteade_puudumisest", ns))
+
+        obliged_el = xml_response.find(".//ns1:esitab_kasusaajad", ns)
+        obliged = _bool(obliged_el)
+
+        owners = []
+        for owner_el in kasusaajad_el.findall("ns1:kasusaaja", ns):
+            discrepancy_raw = _bool(owner_el.find("ns1:lahknevusteade_esitatud", ns))
+            start_raw = _safe_text(owner_el.find("ns1:algus_kpv", ns))
+            end_raw = _safe_text(owner_el.find("ns1:lopp_kpv", ns))
+            owners.append({
+                "first_name":       _safe_text(owner_el.find("ns1:eesnimi", ns)),
+                "last_name":        _safe_text(owner_el.find("ns1:nimi", ns)),
+                "personal_code":    _safe_text(owner_el.find("ns1:isikukood", ns)),
+                "foreign_id":       _safe_text(owner_el.find("ns1:välisriigi_isikukood", ns)),
+                "country_code":     _safe_text(owner_el.find("ns1:aadress_riik", ns)),
+                "country":          _safe_text(owner_el.find("ns1:aadress_riik_tekstina", ns)),
+                "control_code":     _safe_text(owner_el.find("ns1:kontrolli_teostamise_viis", ns)),
+                "control_method":   _safe_text(owner_el.find("ns1:kontrolli_teostamise_viis_tekstina", ns)),
+                "start_date":       start_raw.rstrip("Z") if start_raw else None,
+                "end_date":         end_raw.rstrip("Z") if end_raw else None,
+                "end_type":         _safe_text(owner_el.find("ns1:lopetamise_liik_tekstina", ns)),
+                "discrepancy_note": discrepancy_raw,
+            })
+
+        return {
+            "company_code":           company_code,
+            "obliged_to_report":      obliged,
+            "total_owners":           int(total) if total and total.isdigit() else None,
+            "hidden_owners":          int(hidden) if hidden and hidden.isdigit() else None,
+            "discrepancy_on_absence": discrepancy_absence,
+            "owners":                 owners,
+        }
+
+    except (ET.ParseError, AttributeError, KeyError) as e:
+        log_error(f"Error parsing beneficial owners for {company_code}: {e}")
+        return None
+
+
+def parse_representation_rights_response(
+    xml_response: ET.Element,
+    company_code: str,
+) -> Optional[Dict[str, Any]]:
+    """
+    Parse the esindus_v1 response for a single company.
+
+    Returns a dict with company metadata and a list of person dicts, or None on error.
+    """
+    try:
+        ns = {
+            "ns1": "http://arireg.x-road.eu/producer/",
+            "soapenv": "http://schemas.xmlsoap.org/soap/envelope/",
+        }
+
+        company_el = xml_response.find(".//ns1:ettevotjad/ns1:item", ns)
+        if company_el is None:
+            return None
+
+        persons = []
+        for person_el in company_el.findall("ns1:isikud/ns1:item", ns):
+            exclusive_raw = _safe_text(person_el.find("ns1:ainuesindusoigus_olemas", ns))
+            persons.append({
+                "first_name":              _safe_text(person_el.find("ns1:fyysilise_isiku_eesnimi", ns)),
+                "last_name":               _safe_text(person_el.find("ns1:fyysilise_isiku_perenimi", ns)),
+                "personal_code":           _safe_text(person_el.find("ns1:fyysilise_isiku_kood", ns)),
+                "country_code":            _safe_text(person_el.find("ns1:isikukood_riik", ns)),
+                "country":                 _safe_text(person_el.find("ns1:isikukoodi_riik_tekstina", ns)),
+                "role_code":               _safe_text(person_el.find("ns1:fyysilise_isiku_roll", ns)),
+                "role":                    _safe_text(person_el.find("ns1:fyysilise_isiku_roll_tekstina", ns)),
+                "exclusive_representation": "Yes" if exclusive_raw == "JAH" else "No" if exclusive_raw == "EI" else exclusive_raw,
+            })
+
+        exceptions_el = company_el.find("ns1:esindusoiguse_eritingimused", ns)
+        exceptions = _safe_text(exceptions_el) if exceptions_el is not None else None
+
+        return {
+            "company_code":    _safe_text(company_el.find("ns1:ariregistri_kood", ns)) or company_code,
+            "company_name":    _safe_text(company_el.find("ns1:arinimi", ns)),
+            "status":          _safe_text(company_el.find("ns1:staatus_tekstina", ns)),
+            "legal_form":      _safe_text(company_el.find("ns1:oiguslik_vorm_tekstina", ns)),
+            "exceptions":      exceptions,
+            "persons":         persons,
+        }
+
+    except (ET.ParseError, AttributeError, KeyError) as e:
+        log_error(f"Error parsing representation rights for {company_code}: {e}")
+        return None
+
+
 def parse_statement_codes_by_year(
     xml_response: ET.Element,
     target_year: int,
@@ -243,16 +350,9 @@ def parse_statement_codes_by_year(
         # Determine statement type based on name using substring matching
         entry_name_lower = entry_name.lower()
 
-        # Mapping of statement types to search substrings (case-insensitive)
-        statement_search_map = {
-            'BS': 'bilanss',
-            'IS': 'kasum',
-            'CF': 'raha'
-        }
-
         for statement_type in statement_types:
             st_upper = statement_type.upper()
-            search_substring = statement_search_map.get(st_upper)
+            search_substring = STATEMENT_SEARCH_MAP.get(st_upper)
 
             if search_substring is None:
                 continue

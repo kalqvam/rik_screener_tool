@@ -74,7 +74,7 @@ def add_industry_classifications(
         for chunk in safe_read_csv(
             revenues_file,
             chunk_size=chunk_size,
-            dtype={"report_id": int, "emtak": str}
+            dtype={"emtak": str}
         ):
             filtered_chunk = chunk[
                 (chunk["report_id"].isin(all_report_ids)) &
@@ -125,7 +125,7 @@ def add_industry_classifications(
         return companies_df
 
     if output_file and not return_dataframe:
-        if safe_write_csv(companies_df, output_file):
+        if safe_write_csv(companies_df, output_file, encoding='utf-8'):
             log_info(f"Saved {len(companies_df)} companies with industry codes to {output_file}")
         else:
             log_error(f"Failed to save results to {output_file}")

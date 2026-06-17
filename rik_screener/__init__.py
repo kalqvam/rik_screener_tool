@@ -6,8 +6,7 @@ import re
 from typing import List, Dict, Optional
 from datetime import datetime
 
-DEFAULT_BASE_PATH = "/content/drive/MyDrive/YOUR_FOLDER"
-BASE_PATH = os.getenv('RIK_SCREENER_PATH', DEFAULT_BASE_PATH)
+BASE_PATH = os.getenv('RIK_SCREENER_PATH', '')
 
 from .df_prep.general_filter import filter_companies
 from .df_prep.multi_year_merger import merge_multiple_years
@@ -19,9 +18,11 @@ from .add_info.emtak_descriptions import add_emtak_descriptions, get_industry_su
 from .post_processing.filtering import filter_and_rank
 from .add_info.company_age import add_company_age
 from .post_processing.company_names import add_company_names
+from .emta_screener import run_emta_screening
 from .workflow import run_company_screening, validate_config
+from .utils.logging import log_info, log_warning
 
-__version__ = "4.0.1"
+__version__ = "5.0.0"
 __author__ = "kalqvam"
 
 __all__ = [
@@ -37,10 +38,10 @@ __all__ = [
     'filter_and_rank',
     'add_company_age',
     'add_company_names',
+    'run_emta_screening',
     'run_company_screening',
     'validate_config',
     'BASE_PATH',
-    'setup_environment',
     'get_timestamp',
     'validate_base_path',
     'set_base_path'
@@ -59,7 +60,7 @@ def set_base_path(path: str):
     from .add_info import company_age
     from .post_processing import filtering
     from .post_processing import company_names
-    
+
     general_filter.BASE_PATH = path
     multi_year_merger.BASE_PATH = path
     calculations.BASE_PATH = path
@@ -70,26 +71,18 @@ def set_base_path(path: str):
     filtering.BASE_PATH = path
     company_names.BASE_PATH = path
 
-def setup_environment():
-    try:
-        from google.colab import drive
-        drive.mount('/content/drive')
-        print("Google Drive mounted successfully")
-        return True
-    except ImportError:
-        print("Running outside of Google Colab")
-        return False
-
 def get_timestamp():
     return datetime.now().strftime("%Y%m%d_%H%M%S")
 
 def validate_base_path():
+    if not BASE_PATH:
+        log_warning("RIK_SCREENER_PATH is not set — call set_base_path() or set the environment variable")
+        return False
     if not os.path.exists(BASE_PATH):
-        print(f"Warning: Base path {BASE_PATH} does not exist")
+        log_warning(f"Base path {BASE_PATH} does not exist")
         return False
     return True
 
-print(f"RIK Screener v{__version__} initialized")
-print(f"Base path: {BASE_PATH}")
-print("Use set_base_path() to change the data directory if needed")
-print("New: Use run_company_screening() for streamlined workflow with config-based control")
+log_info(f"RIK Screener v{__version__} initialized")
+if not BASE_PATH:
+    log_info("Set RIK_SCREENER_PATH environment variable to point to your data folder")

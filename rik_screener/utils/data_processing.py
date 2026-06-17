@@ -77,8 +77,8 @@ def clean_column_names(df: pd.DataFrame, inplace: bool = False) -> pd.DataFrame:
 
 def handle_nan_values(
     df: pd.DataFrame,
-    strategy: str = 'fill',
-    fill_value: Any = 1,
+    strategy: str = 'keep',
+    fill_value: Any = None,
     columns: Optional[List[str]] = None
 ) -> pd.DataFrame:
     df_copy = df.copy()

@@ -4,7 +4,8 @@ from .file_operations import (
     safe_write_csv,
     validate_file_exists,
     cleanup_temp_files,
-    get_file_path
+    get_file_path,
+    resolve_filename
 )
 from .data_processing import (
     convert_to_numeric,
@@ -31,6 +32,7 @@ __all__ = [
     'validate_file_exists',
     'cleanup_temp_files',
     'get_file_path',
+    'resolve_filename',
     
     'convert_to_numeric',
     'validate_columns',

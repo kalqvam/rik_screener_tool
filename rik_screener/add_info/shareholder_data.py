@@ -3,6 +3,13 @@ import numpy as np
 import json
 from typing import List, Dict, Optional, Union
 
+def _safe_float(val, default=0.0):
+    try:
+        return float(val) if val else default
+    except (ValueError, TypeError):
+        return default
+
+
 from ..utils import (
     get_config,
     get_file_path,
@@ -54,52 +61,45 @@ def add_ownership_data(
 
         shareholders_dict = {str(company['ariregistri_kood']): company for company in shareholders_data}
 
-        companies_df['owner_count'] = 0
-        companies_df[f'top_{top_percentages}_percentages'] = None
-        companies_df[f'top_{top_names}_owners'] = None
+        owner_counts = {}
+        perc_json_map = {}
+        names_json_map = {}
 
-        processed_count = 0
-        matched_count = 0
+        for company_code, company_data in shareholders_dict.items():
+            shareholders = company_data.get('osanikud', [])
+            owner_count = len(shareholders)
+            owner_counts[company_code] = owner_count
 
-        for idx, row in companies_df.iterrows():
-            company_code = str(row['company_code'])
+            if owner_count > 0:
+                sorted_shareholders = sorted(
+                    shareholders,
+                    key=lambda x: _safe_float(x.get('osaluse_protsent', '0')),
+                    reverse=True
+                )
 
-            if company_code in shareholders_dict:
-                matched_count += 1
-                company_data = shareholders_dict[company_code]
-                shareholders = company_data.get('osanikud', [])
+                top_perc = [float(s.get('osaluse_protsent', '0') or '0') for s in sorted_shareholders[:top_percentages]]
+                top_perc.extend([0] * (top_percentages - len(top_perc)))
+                perc_json_map[company_code] = json.dumps(top_perc)
 
-                owner_count = len(shareholders)
-                companies_df.at[idx, 'owner_count'] = owner_count
+                top_owner_names = []
+                for s in sorted_shareholders[:top_names]:
+                    first_name = s.get('eesnimi', '')
+                    last_name = s.get('nimi_arinimi', '')
+                    if first_name and last_name:
+                        full_name = f"{first_name} {last_name}"
+                    else:
+                        full_name = last_name or first_name or 'Unknown'
+                    top_owner_names.append(full_name)
 
-                if owner_count > 0:
-                    sorted_shareholders = sorted(
-                        shareholders,
-                        key=lambda x: float(x.get('osaluse_protsent', '0') or '0'),
-                        reverse=True
-                    )
+                top_owner_names.extend([''] * (top_names - len(top_owner_names)))
+                names_json_map[company_code] = json.dumps(top_owner_names)
 
-                    top_perc = [float(s.get('osaluse_protsent', '0') or '0') for s in sorted_shareholders[:top_percentages]]
-                    top_perc.extend([0] * (top_percentages - len(top_perc)))
-                    companies_df.at[idx, f'top_{top_percentages}_percentages'] = json.dumps(top_perc)
+        code_series = companies_df['company_code'].astype(str)
+        companies_df['owner_count'] = code_series.map(owner_counts).fillna(0).astype(int)
+        companies_df[f'top_{top_percentages}_percentages'] = code_series.map(perc_json_map)
+        companies_df[f'top_{top_names}_owners'] = code_series.map(names_json_map)
 
-                    top_owner_names = []
-                    for s in sorted_shareholders[:top_names]:
-                        first_name = s.get('eesnimi', '')
-                        last_name = s.get('nimi_arinimi', '')
-                        if first_name and last_name:
-                            full_name = f"{first_name} {last_name}"
-                        else:
-                            full_name = last_name or first_name or 'Unknown'
-                        top_owner_names.append(full_name)
-
-                    top_owner_names.extend([''] * (top_names - len(top_owner_names)))
-                    companies_df.at[idx, f'top_{top_names}_owners'] = json.dumps(top_owner_names)
-
-            processed_count += 1
-            if processed_count % 10000 == 0:
-                log_info(f"Processed {processed_count} companies")
-
+        matched_count = int(code_series.isin(owner_counts).sum())
         log_info(f"Found ownership data for {matched_count} out of {len(companies_df)} companies")
 
         if filters:
@@ -136,7 +136,7 @@ def add_ownership_data(
 
                         if 'exact' in filter_config and filter_config['exact']:
                             exact_values = filter_config['exact']
-                            if not isinstance(exact_values[0], list):
+                            if exact_values and not isinstance(exact_values[0], list):
                                 exact_values = [exact_values]
 
                             for exact_pattern in exact_values:
@@ -180,24 +180,30 @@ def add_ownership_data(
             filtered_out = original_count - len(companies_df)
             log_info(f"Ownership filters removed {filtered_out} companies")
 
-        for idx, row in companies_df.iterrows():
-            if row[f'top_{top_percentages}_percentages'] and row[f'top_{top_percentages}_percentages'] != 'None':
-                try:
-                    percentages = json.loads(row[f'top_{top_percentages}_percentages'])
-                    formatted = [f"{p:.2f}%" for p in percentages if p > 0]
-                    companies_df.at[idx, f'top_{top_percentages}_percentages'] = ', '.join(formatted)
-                except (json.JSONDecodeError, TypeError):
-                    companies_df.at[idx, f'top_{top_percentages}_percentages'] = 'Error'
+        perc_col = f'top_{top_percentages}_percentages'
+        names_col = f'top_{top_names}_owners'
 
-            if row[f'top_{top_names}_owners'] and row[f'top_{top_names}_owners'] != 'None':
-                try:
-                    owners = json.loads(row[f'top_{top_names}_owners'])
-                    companies_df.at[idx, f'top_{top_names}_owners'] = ', '.join([o for o in owners if o])
-                except (json.JSONDecodeError, TypeError):
-                    companies_df.at[idx, f'top_{top_names}_owners'] = 'Error'
+        def _fmt_percentages(s):
+            if not s or s == 'None':
+                return np.nan
+            try:
+                return ', '.join(f"{p:.2f}%" for p in json.loads(s) if p > 0) or np.nan
+            except (json.JSONDecodeError, TypeError):
+                return np.nan
+
+        def _fmt_owners(s):
+            if not s or s == 'None':
+                return np.nan
+            try:
+                return ', '.join(o for o in json.loads(s) if o) or np.nan
+            except (json.JSONDecodeError, TypeError):
+                return np.nan
+
+        companies_df[perc_col] = companies_df[perc_col].apply(_fmt_percentages)
+        companies_df[names_col] = companies_df[names_col].apply(_fmt_owners)
 
         if output_file and not return_dataframe:
-            if safe_write_csv(companies_df, output_file):
+            if safe_write_csv(companies_df, output_file, encoding='utf-8'):
                 log_info(f"Saved {len(companies_df)} companies with ownership data to {output_file}")
             else:
                 log_error(f"Failed to save results to {output_file}")
