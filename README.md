@@ -42,7 +42,12 @@ Both pipelines can be used programmatically, via a config-driven workflow runner
 
 This section covers the full setup for using RIK Screener as an MCP tool inside Claude. If you only want the Python library, skip to [Installation](#installation).
 
-### Step 1 — Clone and install
+### Step 1 — Prerequisites
+
+- **Python 3.10+** — download from [python.org](https://www.python.org/downloads/) if not installed. On Windows, check "Add Python to PATH" during installation.
+- **Git** — required to clone the repository. On Windows, download from [git-scm.com](https://git-scm.com/download/win); the installer adds `git` to your PATH so it works in any terminal.
+
+### Step 2 — Clone and install
 
 ```bash
 git clone https://github.com/kalqvam/rik_screener_tool.git
@@ -50,7 +55,7 @@ cd rik_screener_tool
 pip install -e ".[mcp]"
 ```
 
-### Step 2 — Download the data
+### Step 3 — Download the data
 
 The screener reads large open-data CSV files that are not included in the repository. The included `download_data.py` script fetches everything:
 
@@ -60,7 +65,7 @@ python download_data.py --all --years 2021 2022 2023 2024 2025 --target /path/to
 
 This downloads and extracts ~2 GB of RIK and EMTA files. Run it once to get started; re-run with `--force` to update when new data is published.
 
-### Step 3 — Set up credentials (optional)
+### Step 4 — Set up credentials (optional)
 
 The CSV screening tools work without credentials. The **live RIK API tools** (`get_financial_statements`, `check_statement_consistency`, board members, beneficial owners) require a RIK account.
 
@@ -73,7 +78,7 @@ RIK_PASSWORD=your_password_here
 
 This file is gitignored and will never be committed. You can register for RIK API access at [ariregister.rik.ee](https://ariregister.rik.ee/est/register).
 
-### Step 4 — Configure Claude
+### Step 5 — Configure Claude
 
 #### Claude for Desktop
 
