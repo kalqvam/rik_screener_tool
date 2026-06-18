@@ -356,7 +356,8 @@ def get_financial_statements_tool(
         company_codes:  List of 7–8 digit registry code strings.
         statement_type: "BS" (Balance Sheet), "IS" (Income Statement),
                         or "CF" (Cash Flow Statement). Default "BS".
-        starting_year:  Most recent year to fetch. Defaults to current year.
+        starting_year:  Most recent year to fetch. Defaults to current year minus 1
+                        (the most recent complete fiscal year).
         num_requests:   How many years back to retrieve. Default 1.
                         E.g. starting_year=2023, num_requests=3 → 2023, 2021, 2019
                         (step of 2 years is the default; each SOAP response covers

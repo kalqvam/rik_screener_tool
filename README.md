@@ -17,6 +17,9 @@ Both pipelines can be used programmatically, via a config-driven workflow runner
 
 ## Table of Contents
 
+- [Getting Started](#getting-started)
+  - [Claude for Desktop](#claude-for-desktop)
+  - [Claude Code](#claude-code)
 - [Features](#features)
 - [Requirements](#requirements)
 - [Installation](#installation)
@@ -32,6 +35,109 @@ Both pipelines can be used programmatically, via a config-driven workflow runner
   - [Live RIK API](#live-rik-api)
 - [Configuration Reference](#configuration-reference)
 - [License](#license)
+
+---
+
+## Getting Started
+
+This section covers the full setup for using RIK Screener as an MCP tool inside Claude. If you only want the Python library, skip to [Installation](#installation).
+
+### Step 1 — Clone and install
+
+```bash
+git clone https://github.com/kalqvam/rik_screener_tool.git
+cd rik_screener_tool
+pip install -e ".[mcp]"
+```
+
+### Step 2 — Download the data
+
+The screener reads large open-data CSV files that are not included in the repository. The included `download_data.py` script fetches everything:
+
+```bash
+python download_data.py --all --years 2021 2022 2023 2024 2025 --target /path/to/your/data
+```
+
+This downloads and extracts ~2 GB of RIK and EMTA files. Run it once to get started; re-run with `--force` to update when new data is published.
+
+### Step 3 — Set up credentials (optional)
+
+The CSV screening tools work without credentials. The **live RIK API tools** (`get_financial_statements`, `check_statement_consistency`, board members, beneficial owners) require a RIK account.
+
+Copy `credentials.txt` in the project root and fill in your details:
+
+```
+RIK_USERNAME=your_username_here
+RIK_PASSWORD=your_password_here
+```
+
+This file is gitignored and will never be committed. You can register for RIK API access at [ariregister.rik.ee](https://ariregister.rik.ee/est/register).
+
+### Step 4 — Configure Claude
+
+#### Claude for Desktop
+
+Open the Claude for Desktop config file:
+
+- **Windows:** `%APPDATA%\Claude\claude_desktop_config.json`
+  - Typically: `C:\Users\<you>\AppData\Roaming\Claude\claude_desktop_config.json`
+- **macOS:** `~/Library/Application Support/Claude/claude_desktop_config.json`
+
+Add the `rik-screener` block inside `mcpServers` (create the file if it doesn't exist):
+
+```json
+{
+  "mcpServers": {
+    "rik-screener": {
+      "command": "python",
+      "args": ["-m", "rik_screener.mcp_server"],
+      "cwd": "/path/to/rik_screener_tool",
+      "env": {
+        "RIK_SCREENER_PATH": "/path/to/your/data",
+        "RIK_USERNAME": "your_username_here",
+        "RIK_PASSWORD": "your_password_here"
+      }
+    }
+  }
+}
+```
+
+Replace `/path/to/rik_screener_tool` with the folder where you cloned the repo, and `/path/to/your/data` with the folder you passed to `download_data.py`. On Windows use forward slashes or escaped backslashes, e.g. `C:/Users/you/data`.
+
+If you don't have RIK API credentials yet, omit `RIK_USERNAME` and `RIK_PASSWORD` — the screening tools work without them.
+
+Restart Claude for Desktop after saving. The rik-screener tools will appear automatically.
+
+#### Claude Code
+
+Place `.mcp.json` in the project root (copy from `.mcp.json.example`):
+
+```bash
+cp .mcp.json.example .mcp.json
+```
+
+Edit `.mcp.json` with your paths:
+
+```json
+{
+  "mcpServers": {
+    "rik-screener": {
+      "command": "python",
+      "args": ["-m", "rik_screener.mcp_server"],
+      "cwd": "/path/to/rik_screener_tool",
+      "env": {
+        "RIK_SCREENER_PATH": "/path/to/your/data",
+        "RIK_USERNAME": "${RIK_USERNAME}",
+        "RIK_PASSWORD": "${RIK_PASSWORD}"
+      }
+    }
+  }
+}
+```
+
+Claude Code supports `${VAR}` references to shell environment variables. You can set `RIK_USERNAME` and `RIK_PASSWORD` in your shell profile, or fill them in directly. `.mcp.json` is gitignored and safe to use for either approach.
+
+Reload the Claude Code window to connect the server (`Ctrl+Shift+P` → `Developer: Reload Window` in VS Code).
 
 ---
 

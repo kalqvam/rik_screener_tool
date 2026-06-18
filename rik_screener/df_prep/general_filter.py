@@ -21,7 +21,7 @@ def filter_companies(
     column_mapping = {
         "report_id": "report_id",
         "registrikood": "registrikood",
-        "aruandeaast": "aruandeaast",
+        "aruandeaasta": "aruandeaasta",
         "õiguslik vorm": "õiguslik vorm",
         "staatus": "staatus"
     }
@@ -38,7 +38,7 @@ def filter_companies(
     general_data = general_data.rename(columns=inverse_mapping)
 
     filtered_companies = general_data[
-        (general_data["aruandeaast"] == year) &
+        (general_data["aruandeaasta"] == year) &
         (general_data["õiguslik vorm"].isin(legal_forms)) &
         (general_data["staatus"] == "Registrisse kantud")
     ]
@@ -50,7 +50,7 @@ def filter_companies(
     log_info(f"Found {len(filtered_companies)} active companies with the specified legal forms")
 
     filtered_companies = filtered_companies.rename(columns={
-        "aruandeaast": "year",
+        "aruandeaasta": "year",
         "registrikood": "company_code",
         "õiguslik vorm": "legal_form"
     })

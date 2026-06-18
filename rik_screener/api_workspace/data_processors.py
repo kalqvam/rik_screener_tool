@@ -1,7 +1,7 @@
 import pandas as pd
 import xml.etree.ElementTree as ET
 from typing import List, Optional, Dict, Any, Iterable
-from ..utils import log_error
+from ..utils import log_error, log_warning
 
 STATEMENT_SEARCH_MAP: Dict[str, str] = {
     'BS': 'bilanss',
@@ -118,7 +118,10 @@ def extract_statement_code(
         if matched_code is not None:
             codes.append(matched_code)
         else:
-            raise ValueError(f"No {statement_type.upper()} code found for year {year}")
+            log_warning(f"No {statement_type.upper()} report found for year {year} — skipping")
+
+    if not codes:
+        raise ValueError(f"No {statement_type.upper()} reports found for any of the requested years")
 
     unique_codes = set(codes)
     if len(unique_codes) > 1:

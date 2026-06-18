@@ -192,7 +192,7 @@ def get_financial_statements(
         raise ValueError("year_step must be at least 1")
 
     if starting_year is None:
-        starting_year = datetime.utcnow().year
+        starting_year = datetime.utcnow().year - 1
 
     years = _generate_years(starting_year, num_requests, year_step)
 
