@@ -30,7 +30,8 @@ def calculate_ratios(
     financial_items: List[str] = None,
     formulas: Dict[str, str] = None,
     use_standard_formulas: bool = True,
-    return_dataframe: bool = False
+    return_dataframe: bool = False,
+    early_filters: Optional[List[Dict]] = None,
 ) -> Union[pd.DataFrame, None]:
     config = get_config()
     
@@ -79,15 +80,58 @@ def calculate_ratios(
     log_info(f"Loaded {len(result)} companies from merged data")
     log_info(f"Columns in merged data: {sorted(result.columns.tolist())}")
     
-    result = merge_financial_data(result, years, financial_items)
-    
-    valid_formulas, formula_errors = validate_formulas(formulas, result)
-    if formula_errors:
-        log_warning(f"Found {len(formula_errors)} formula validation errors")
-    
-    result = apply_formulas(result, valid_formulas)
+    ref_year = years[0]
+    hist_years = years[1:]
 
-    result = flag_investment_vehicles(result, years, valid_formulas)
+    # Split formulas: those that reference only the reference year vs those that need
+    # historical year columns (growth, CAGR, anything with _{hist_year} in the expression).
+    if hist_years:
+        ref_formulas = {
+            k: v for k, v in formulas.items()
+            if all(f'_{hy}' not in v for hy in hist_years)
+        }
+        hist_formulas = {k: v for k, v in formulas.items() if k not in ref_formulas}
+    else:
+        ref_formulas = formulas
+        hist_formulas = {}
+
+    # Phase 1: reference year
+    result = merge_financial_data(result, [ref_year], financial_items)
+
+    valid_ref, ref_errors = validate_formulas(ref_formulas, result)
+    if ref_errors:
+        log_warning(f"Found {len(ref_errors)} reference-year formula validation errors")
+    result = apply_formulas(result, valid_ref)
+
+    # Apply any filter whose column now exists — shrinks result before historical loads
+    if early_filters:
+        for f in early_filters:
+            col = f.get("column")
+            if col not in result.columns:
+                continue
+            min_val = f.get("min")
+            max_val = f.get("max")
+            before = len(result)
+            if min_val is not None:
+                result = result[result[col] >= min_val]
+            if max_val is not None:
+                result = result[result[col] <= max_val]
+            after = len(result)
+            if after < before:
+                log_info(f"Early filter on {col}: {before} -> {after} companies")
+
+    # Phase 2: historical years — report_id_filter derived from filtered result automatically
+    if hist_years:
+        result = merge_financial_data(result, hist_years, financial_items)
+        valid_hist, hist_errors = validate_formulas(hist_formulas, result)
+        if hist_errors:
+            log_warning(f"Found {len(hist_errors)} historical-year formula validation errors")
+        result = apply_formulas(result, valid_hist)
+    else:
+        valid_hist = {}
+
+    all_valid = {**valid_ref, **valid_hist}
+    result = flag_investment_vehicles(result, years, all_valid)
     
     if output_file and not return_dataframe:
         if safe_write_csv(result, output_file, encoding='utf-8'):

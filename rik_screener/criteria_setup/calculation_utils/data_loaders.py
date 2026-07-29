@@ -1,5 +1,5 @@
 import pandas as pd
-from typing import List, Optional
+from typing import List, Optional, Set
 
 from ...utils import (
     safe_read_csv,
@@ -7,18 +7,39 @@ from ...utils import (
     log_warning
 )
 
+_USECOLS = ["report_id", "tabel", "elemendi_label", "vaartus"]
 
-def load_financial_data(year: int, financial_items: List[str]) -> Optional[pd.DataFrame]:
+
+def load_financial_data(
+    year: int,
+    financial_items: List[str],
+    report_id_filter: Optional[Set] = None,
+) -> Optional[pd.DataFrame]:
     financial_file = f"financials_{year}.csv"
-    financial_data = safe_read_csv(
-        financial_file,
-        usecols=["report_id", "tabel", "elemendi_label", "vaartus"]
-    )
-    
-    if financial_data is None:
-        log_warning(f"Financial file for {year} not found")
-        return None
-    
+
+    if report_id_filter is not None:
+        if not report_id_filter:
+            return None
+        reader = safe_read_csv(financial_file, usecols=_USECOLS, chunk_size=200_000)
+        if reader is None:
+            log_warning(f"Financial file for {year} not found")
+            return None
+        chunks = []
+        for chunk in reader:
+            chunk.columns = chunk.columns.str.strip()
+            filtered = chunk[chunk["report_id"].isin(report_id_filter)]
+            if not filtered.empty:
+                chunks.append(filtered)
+        if not chunks:
+            log_info(f"No financial data found for year {year} with provided report_ids")
+            return None
+        financial_data = pd.concat(chunks, ignore_index=True)
+    else:
+        financial_data = safe_read_csv(financial_file, usecols=_USECOLS)
+        if financial_data is None:
+            log_warning(f"Financial file for {year} not found")
+            return None
+
     log_info(f"Reading financial data for {year}")
     
     financial_data['clean_elemendi_label'] = financial_data['elemendi_label'].str.replace(' Konsolideeritud$', '', regex=True)

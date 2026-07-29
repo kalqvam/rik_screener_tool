@@ -22,7 +22,8 @@ def merge_financial_data(
             log_warning(f"{report_id_col} not found in merged data. Skipping year {year}")
             continue
         
-        financial_wide = load_financial_data(year, financial_items)
+        report_ids = set(result[report_id_col].dropna().unique())
+        financial_wide = load_financial_data(year, financial_items, report_id_filter=report_ids or None)
         if financial_wide is None:
             continue
         

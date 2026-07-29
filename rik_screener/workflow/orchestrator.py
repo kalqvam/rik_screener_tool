@@ -129,9 +129,10 @@ def _calculate_financial_ratios_df(config: Dict[str, Any], input_df: pd.DataFram
             formulas=standard_formulas,
             financial_items=financial_items,
             use_standard_formulas=False,
-            return_dataframe=True
+            return_dataframe=True,
+            early_filters=config.get('financial_filters'),
         )
-        
+
         if current_df is None or current_df.empty:
             raise RuntimeError("Failed to calculate standard formulas")
     
@@ -154,12 +155,13 @@ def _calculate_financial_ratios_df(config: Dict[str, Any], input_df: pd.DataFram
             formulas={},
             financial_items=financial_items,
             use_standard_formulas=False,
-            return_dataframe=True
+            return_dataframe=True,
+            early_filters=config.get('financial_filters'),
         )
-        
+
         if current_df is None or current_df.empty:
             raise RuntimeError("Failed to merge financial data")
-    
+
     return current_df
 
 
@@ -391,7 +393,8 @@ def _calculate_financial_ratios(config: Dict[str, Any], input_file: str) -> str:
             years=years,
             formulas=standard_formulas,
             financial_items=financial_items,
-            use_standard_formulas=False
+            use_standard_formulas=False,
+            early_filters=config.get('financial_filters'),
         )
         
         if ratios_df is None or ratios_df.empty:
@@ -428,7 +431,8 @@ def _calculate_financial_ratios(config: Dict[str, Any], input_file: str) -> str:
             years=years,
             formulas={},
             financial_items=financial_items,
-            use_standard_formulas=False
+            use_standard_formulas=False,
+            early_filters=config.get('financial_filters'),
         )
         
         if ratios_df is None or ratios_df.empty:

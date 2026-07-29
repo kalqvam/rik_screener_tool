@@ -22,8 +22,12 @@ Start the server:
   rik-screener-mcp
 """
 
+import datetime
+import json
 import os
 import re
+import subprocess
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -46,6 +50,48 @@ from .post_processing.mcp_formatter import (
 )
 from .utils.translations import COLUMN_TRANSLATIONS, translate_dataframe_columns
 from .workflow.orchestrator import run_company_screening
+
+
+def _coerce_json_str(val, param_name: str):
+    """
+    Some MCP clients (e.g. Claude Cowork) JSON-encode list/dict parameters as
+    strings instead of passing them as native JSON.  This helper transparently
+    parses the string back to its intended type so the rest of the tool logic
+    is unaffected.  Non-string values pass through unchanged.
+    """
+    if val is None or not isinstance(val, str):
+        return val
+    try:
+        return json.loads(val)
+    except json.JSONDecodeError as exc:
+        raise ValueError(
+            f"Parameter '{param_name}' was received as a string but could not "
+            f"be parsed as JSON: {exc}"
+        ) from exc
+
+
+def _is_pid_running(pid: int) -> bool:
+    """Return True if a process with the given PID exists and is still running."""
+    try:
+        import psutil
+        return psutil.pid_exists(pid)
+    except ImportError:
+        pass
+    if os.name == "nt":
+        import ctypes
+        SYNCHRONIZE = 0x00100000
+        handle = ctypes.windll.kernel32.OpenProcess(SYNCHRONIZE, False, pid)
+        if handle:
+            ctypes.windll.kernel32.CloseHandle(handle)
+            return True
+        return False
+    else:
+        try:
+            os.kill(pid, 0)
+            return True
+        except OSError:
+            return False
+
 
 mcp = FastMCP(
     "rik-screener",
@@ -341,9 +387,10 @@ def get_latest_reports(
 def get_financial_statements_tool(
     company_codes: List[str],
     statement_type: str = "BS",
-    starting_year: Optional[int] = None,
+    starting_year: int = None,
     num_requests: int = 1,
     rate_limit: int = 20,
+    consolidation_type: str = "any",
     username: Optional[str] = None,
     password: Optional[str] = None,
 ) -> str:
@@ -353,18 +400,29 @@ def get_financial_statements_tool(
     Requires RIK API credentials (set RIK_USERNAME / RIK_PASSWORD env vars).
 
     Args:
-        company_codes:  List of 7–8 digit registry code strings.
-        statement_type: "BS" (Balance Sheet), "IS" (Income Statement),
-                        or "CF" (Cash Flow Statement). Default "BS".
-        starting_year:  Most recent year to fetch. Defaults to current year minus 1
-                        (the most recent complete fiscal year).
-        num_requests:   How many years back to retrieve. Default 1.
-                        E.g. starting_year=2023, num_requests=3 → 2023, 2021, 2019
-                        (step of 2 years is the default; each SOAP response covers
-                        a 2-year comparison period).
-        rate_limit:     Max API requests per minute. Default 20.
-        username:       RIK API username (overrides RIK_USERNAME env var).
-        password:       RIK API password (overrides RIK_PASSWORD env var).
+        company_codes:       List of 7–8 digit registry code strings.
+        statement_type:      "BS" (Balance Sheet), "IS" (Income Statement),
+                             or "CF" (Cash Flow Statement). Default "BS".
+        starting_year:       Most recent year to fetch. Defaults to current year minus 1
+                             (the most recent complete fiscal year).
+        num_requests:        How many years back to retrieve. Default 1.
+                             E.g. starting_year=2023, num_requests=3 → 2023, 2021, 2019
+                             (step of 2 years is the default; each SOAP response covers
+                             a 2-year comparison period).
+        rate_limit:          Max API requests per minute. Default 20.
+        consolidation_type:  Which report variant to fetch when a company files both
+                             consolidated and non-consolidated statements:
+                               "consolidated"     — fetch "Konsolideeritud" version
+                               "non-consolidated" — fetch "Konsolideerimata" version
+                               "any"              — use whichever appears first (default)
+                             IMPORTANT: many Estonian companies (especially holding
+                             structures and banking groups) file both. If the user has
+                             not specified which they want, ASK before fetching. You can
+                             also call this tool twice (once per type) to show both.
+                             Use check_statement_consistency first to see what types
+                             are available for a given company.
+        username:            RIK API username (overrides RIK_USERNAME env var).
+        password:            RIK API password (overrides RIK_PASSWORD env var).
 
     Returns:
         Markdown report with financial statement lines as rows and years as columns,
@@ -380,6 +438,7 @@ def get_financial_statements_tool(
             starting_year=starting_year,
             num_requests=num_requests,
             rate_limit=rate_limit,
+            consolidation_type=consolidation_type,
         )
         return format_financial_statements(df, company_codes, statement_type)
     except Exception as e:
@@ -395,8 +454,9 @@ def check_statement_consistency_tool(
     company_codes: List[str],
     target_year: int,
     end_year: int,
-    statement_types: Optional[List[str]] = None,
+    statement_types: List[str] = None,
     rate_limit: int = 20,
+    consolidation_type: str = "any",
     username: Optional[str] = None,
     password: Optional[str] = None,
 ) -> str:
@@ -405,18 +465,24 @@ def check_statement_consistency_tool(
 
     Run this before get_financial_statements when doing multi-year analysis —
     a code change means the line-item structure changed and year-over-year
-    comparisons may not be valid.
+    comparisons may not be valid. The result also shows the consolidation status
+    ("Consolidated", "Non-consolidated", or "Consolidated since YYYY"), which
+    tells you whether a consolidated variant exists and which years it covers.
 
     Requires RIK API credentials (set RIK_USERNAME / RIK_PASSWORD env vars).
 
     Args:
-        company_codes:    List of 7–8 digit registry code strings.
-        target_year:      Most recent year (e.g. 2023). Must be >= end_year.
-        end_year:         Oldest year to check (e.g. 2020).
-        statement_types:  List of types to check. Default ["BS", "IS", "CF"].
-        rate_limit:       Max API requests per minute. Default 20.
-        username:         RIK API username (overrides RIK_USERNAME env var).
-        password:         RIK API password (overrides RIK_PASSWORD env var).
+        company_codes:       List of 7–8 digit registry code strings.
+        target_year:         Most recent year (e.g. 2023). Must be >= end_year.
+        end_year:            Oldest year to check (e.g. 2020).
+        statement_types:     List of types to check. Default ["BS", "IS", "CF"].
+        rate_limit:          Max API requests per minute. Default 20.
+        consolidation_type:  Which report variant to check codes for when both exist:
+                               "consolidated", "non-consolidated", or "any" (default).
+                             Use "any" here to discover available codes, then pick a
+                             type and call get_financial_statements with that type.
+        username:            RIK API username (overrides RIK_USERNAME env var).
+        password:            RIK API password (overrides RIK_PASSWORD env var).
 
     Returns:
         Markdown table showing whether each company's structure is consistent,
@@ -434,6 +500,7 @@ def check_statement_consistency_tool(
             end_year=end_year,
             statement_types=statement_types,
             rate_limit=rate_limit,
+            consolidation_type=consolidation_type,
         )
         return format_consistency_check(results, statement_types, target_year, end_year)
     except Exception as e:
@@ -649,6 +716,7 @@ def _format_beneficial_owners(results: list, requested_codes: List[str] = None) 
 def get_annual_report_toc(
     company_code: str,
     year: int,
+    file_id: str = None,
 ) -> str:
     """Fetch the table of contents (Sisukord) from a company's annual report PDF.
 
@@ -666,6 +734,11 @@ def get_annual_report_toc(
     Args:
         company_code: Estonian company registry code (e.g. "10523510")
         year:         Report year (e.g. 2024)
+        file_id:      Optional. Override the automatic file ID lookup by supplying
+                      the numeric ID directly (e.g. "9014181520" from
+                      /est/company/10100168/file/9014181520). Rarely needed — the
+                      SOAP-based discovery handles IFRS filers and all other cases
+                      automatically when credentials are configured.
 
     Returns:
         Markdown table of contents with section names and page ranges.
@@ -678,9 +751,18 @@ def get_annual_report_toc(
     if cached:
         return _format_toc(company_code, year, cached, from_cache=True)
 
-    file_id = discover_file_id(company_code, year)
     if not file_id:
-        return f"## Error\n\nNo annual report found for company `{company_code}` year `{year}`. Check that the company code and year are correct."
+        try:
+            u, p = _get_credentials(None, None)
+        except ValueError:
+            u, p = None, None
+        file_id = discover_file_id(company_code, year, username=u, password=p)
+    if not file_id:
+        return (
+            f"## Error\n\nNo annual report found for company `{company_code}` year `{year}`.\n\n"
+            f"The SOAP document list returned no annual report PDF for this company and year. "
+            f"The report may not yet be filed, or you can supply the `file_id` manually as a fallback."
+        )
 
     try:
         pdf_path = download_pdf(company_code, year, file_id)
@@ -1252,30 +1334,30 @@ async def screen_companies(
     years: List[int],
     ctx: Context,
     data_path: Optional[str] = None,
-    legal_forms: Optional[List[str]] = None,
+    legal_forms: List[str] = None,
     top_n: int = 50,
     sort_column: Optional[str] = None,
     sort_ascending: bool = False,
-    standard_formulas: Optional[Dict[str, Any]] = None,
-    custom_formulas: Optional[Dict[str, str]] = None,
-    financial_filters: Optional[List[Dict[str, Any]]] = None,
+    standard_formulas: Dict[str, Any] = None,
+    custom_formulas: Dict[str, str] = None,
+    financial_filters: List[Dict[str, Any]] = None,
     industry_keyword: Optional[str] = None,
-    industry_codes: Optional[List[str]] = None,
-    ownership_filters: Optional[Dict[str, Any]] = None,
-    export_columns: Optional[List[str]] = None,
-    skip_steps: Optional[List[str]] = None,
-    company_codes: Optional[List[str]] = None,
+    industry_codes: List[str] = None,
+    ownership_filters: Dict[str, Any] = None,
+    export_columns: List[str] = None,
+    skip_steps: List[str] = None,
+    company_codes: List[str] = None,
     # Geography filters
-    min_export_share: Optional[float] = None,
-    max_domestic_share: Optional[float] = None,
-    export_countries: Optional[List[str]] = None,
-    geography_filters: Optional[Dict[str, Any]] = None,
+    min_export_share: float = None,
+    max_domestic_share: float = None,
+    export_countries: List[str] = None,
+    geography_filters: Dict[str, Any] = None,
     # Legacy convenience shortcuts
-    min_ebitda_margin: Optional[float] = None,
-    min_revenue: Optional[float] = None,
-    min_equity: Optional[float] = None,
-    min_revenue_growth: Optional[float] = None,
-    min_revenue_cagr: Optional[float] = None,
+    min_ebitda_margin: float = None,
+    min_revenue: float = None,
+    min_equity: float = None,
+    min_revenue_growth: float = None,
+    min_revenue_cagr: float = None,
 ) -> str:
     """
     Run the full company screening pipeline on local RIK open-data CSV files.
@@ -1362,6 +1444,21 @@ async def screen_companies(
         Markdown report with summary statistics and a ranked company table.
     """
     try:
+        # Cowork (and some other MCP clients) serialise list/dict args as
+        # JSON-encoded strings.  Normalise them all up front.
+        years              = _coerce_json_str(years,              "years")
+        legal_forms        = _coerce_json_str(legal_forms,        "legal_forms")
+        standard_formulas  = _coerce_json_str(standard_formulas,  "standard_formulas")
+        custom_formulas    = _coerce_json_str(custom_formulas,    "custom_formulas")
+        financial_filters  = _coerce_json_str(financial_filters,  "financial_filters")
+        industry_codes     = _coerce_json_str(industry_codes,     "industry_codes")
+        ownership_filters  = _coerce_json_str(ownership_filters,  "ownership_filters")
+        export_columns     = _coerce_json_str(export_columns,     "export_columns")
+        skip_steps         = _coerce_json_str(skip_steps,         "skip_steps")
+        company_codes      = _coerce_json_str(company_codes,      "company_codes")
+        export_countries   = _coerce_json_str(export_countries,   "export_countries")
+        geography_filters  = _coerce_json_str(geography_filters,  "geography_filters")
+
         path = data_path or os.environ.get("RIK_SCREENER_PATH", "")
         if not path:
             return (
@@ -1522,6 +1619,20 @@ async def screen_companies(
         if translated.empty:
             return warning + "## Screening Results\n\nNo companies matched the industry filter."
 
+        # Warn if any requested year has zero financial columns in results
+        # (checked here, before export_columns narrows the column set, so the check
+        # reflects actual data loaded — not columns the user chose not to export)
+        absent_years = [
+            y for y in years
+            if not any(c.endswith(f"_{y}") for c in translated.columns)
+        ]
+        if absent_years:
+            warning += (
+                f"> **Warning:** no data found for year(s) "
+                f"{', '.join(str(y) for y in absent_years)} — CSV files for these "
+                f"years may be missing. Results only include available years.\n\n"
+            )
+
         # Apply export_columns filter now that columns are in English
         # (auto-added industry cols are excluded unless user originally requested them)
         sort_was_computed = sort_column is not None and sort_column in translated.columns
@@ -1534,6 +1645,12 @@ async def screen_companies(
             missing = [c for c in original_export if c not in translated.columns]
             if missing:
                 await ctx.warning(f"Requested columns not found (skipped): {missing}")
+                warning += (
+                    f"> **Warning:** requested export column(s) not found and were skipped: "
+                    + ", ".join(f"`{c}`" for c in missing)
+                    + ". Check the column name — formula outputs use the exact key you defined"
+                    " (e.g. `revenue_growth_2024_to_2025`, not `revenue_growth_2024_2025`).\n\n"
+                )
             if available:
                 translated = translated[available]
 
@@ -1570,18 +1687,6 @@ async def screen_companies(
                 "filters were NOT applied.\n\n"
             )
 
-        # Warn if any requested year has zero financial columns in results
-        # (happens when that year's CSV is missing and the merger silently skipped it)
-        absent_years = [
-            y for y in years
-            if not any(c.endswith(f"_{y}") for c in translated.columns)
-        ]
-        if absent_years:
-            warning += (
-                f"> **Warning:** no data found for year(s) "
-                f"{', '.join(str(y) for y in absent_years)} — CSV files for these "
-                f"years may be missing. Results only include available years.\n\n"
-            )
 
         # Warn if any custom formula is absent from results (validation failed before it ran)
         # Formulas that ran but produced all-NaN are handled separately in the summary footnote.
@@ -1641,12 +1746,12 @@ async def screen_emta(
     data_path: Optional[str] = None,
     top_n: int = 50,
     sort_ascending: bool = False,
-    min_turnover_yoy: Optional[float] = None,
-    max_turnover_yoy: Optional[float] = None,
-    min_turnover: Optional[float] = None,
+    min_turnover_yoy: float = None,
+    max_turnover_yoy: float = None,
+    min_turnover: float = None,
     industry_keyword: Optional[str] = None,
     region: Optional[str] = None,
-    company_codes: Optional[List[str]] = None,
+    company_codes: List[str] = None,
 ) -> str:
     """
     Screen Estonian companies using EMTA quarterly VAT-turnover data only.
@@ -1691,6 +1796,8 @@ async def screen_emta(
     Returns a markdown report with a ranked company table.
     """
     try:
+        company_codes = _coerce_json_str(company_codes, "company_codes")
+
         path = data_path or os.environ.get("RIK_SCREENER_PATH", "")
         if not path:
             return (
@@ -1804,6 +1911,211 @@ def _format_emta_results(df, top_n: int = 50, filters: dict = None) -> str:
         footer = f"\n\n*Showing top {top_n} of {total} companies. Adjust `top_n` to see more.*"
 
     return header + "\n" + table + footer
+
+
+# ---------------------------------------------------------------------------
+# Tool — trigger_data_download
+# ---------------------------------------------------------------------------
+
+_DOWNLOAD_SCRIPT = Path(__file__).parent.parent / "download_data.py"
+_STATUS_DIR_NAME = "download_status"
+_STATUS_FILE = "status.json"
+_LOG_FILE = "download.log"
+
+
+@mcp.tool()
+def trigger_data_download(
+    mode: str = "all",
+    years: List[int] = None,
+    force: bool = False,
+    data_path: Optional[str] = None,
+) -> str:
+    """
+    Trigger a background download of RIK open-data and/or EMTA CSV files.
+
+    Returns immediately — the download runs as a detached background process.
+    Call get_download_status() to check progress and view the log.
+
+    A new download is blocked if one is already running; check status first.
+
+    Args:
+        mode:       What to download: "all" (default), "rik", or "emta".
+        years:      RIK financial years to fetch (default: [2023, 2024, 2025]).
+                    Only relevant for mode "rik" or "all".
+        force:      Re-download even if files already exist. Default False.
+        data_path:  Target folder for CSV files. Defaults to RIK_SCREENER_PATH.
+
+    Returns:
+        Confirmation with PID, target folder, and status file path.
+    """
+    try:
+        years = _coerce_json_str(years, "years")
+
+        path = data_path or os.environ.get("RIK_SCREENER_PATH", "")
+        if not path:
+            return (
+                "## Error\n\n"
+                "Data path not set. Pass `data_path` or set `RIK_SCREENER_PATH`."
+            )
+
+        if not _DOWNLOAD_SCRIPT.exists():
+            return f"## Error\n\n`download_data.py` not found at `{_DOWNLOAD_SCRIPT}`."
+
+        status_dir = Path(path) / _STATUS_DIR_NAME
+        status_dir.mkdir(parents=True, exist_ok=True)
+        status_path = status_dir / _STATUS_FILE
+        log_path = status_dir / _LOG_FILE
+
+        # Block if a download is already in progress
+        if status_path.exists():
+            try:
+                prev = json.loads(status_path.read_text(encoding="utf-8"))
+                prev_pid = prev.get("pid")
+                if prev_pid and _is_pid_running(prev_pid):
+                    return (
+                        f"## Download Already Running\n\n"
+                        f"PID {prev_pid} started at {prev.get('started_at', '?')} is still active.\n"
+                        f"Call `get_download_status()` to check progress, or wait until it finishes."
+                    )
+            except Exception:
+                pass
+
+        valid_modes = {"all", "rik", "emta"}
+        if mode not in valid_modes:
+            return f"## Error\n\n`mode` must be one of: {', '.join(sorted(valid_modes))}."
+
+        cmd = [sys.executable, str(_DOWNLOAD_SCRIPT), f"--{mode}", "--target", str(path)]
+        if years and mode in ("rik", "all"):
+            cmd += ["--years"] + [str(y) for y in years]
+        if force:
+            cmd.append("--force")
+
+        with open(log_path, "w", encoding="utf-8") as log_file:
+            kwargs: Dict[str, Any] = {
+                "stdout": log_file,
+                "stderr": subprocess.STDOUT,
+                "cwd": str(_DOWNLOAD_SCRIPT.parent),
+            }
+            if os.name == "nt":
+                kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+            else:
+                kwargs["start_new_session"] = True
+            proc = subprocess.Popen(cmd, **kwargs)
+
+        status_obj = {
+            "pid": proc.pid,
+            "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+            "command": cmd,
+            "log_file": str(log_path),
+            "mode": mode,
+            "years": years,
+            "force": force,
+        }
+        status_path.write_text(json.dumps(status_obj, indent=2), encoding="utf-8")
+
+        year_note = f", years: {years}" if years and mode in ("rik", "all") else ""
+        return (
+            f"## Download Started\n\n"
+            f"- **PID:** {proc.pid}\n"
+            f"- **Mode:** {mode}{year_note}\n"
+            f"- **Force:** {force}\n"
+            f"- **Target:** `{path}`\n"
+            f"- **Log:** `{log_path}`\n\n"
+            f"Call `get_download_status()` to check progress."
+        )
+    except Exception as e:
+        return f"## Error\n\n{e}"
+
+
+# ---------------------------------------------------------------------------
+# Tool — get_download_status
+# ---------------------------------------------------------------------------
+
+@mcp.tool()
+def get_download_status(data_path: Optional[str] = None) -> str:
+    """
+    Check the status of the most recent background download started by trigger_data_download().
+
+    Reads the status file and log written next to the CSV data folder, checks whether
+    the background process is still running, and returns the last 30 lines of output.
+
+    Args:
+        data_path: Path to the CSV data folder. Defaults to RIK_SCREENER_PATH.
+
+    Returns:
+        Status report: running / completed / failed, elapsed time, and recent log output.
+    """
+    try:
+        path = data_path or os.environ.get("RIK_SCREENER_PATH", "")
+        if not path:
+            return (
+                "## Error\n\n"
+                "Data path not set. Pass `data_path` or set `RIK_SCREENER_PATH`."
+            )
+
+        status_dir = Path(path) / _STATUS_DIR_NAME
+        status_path = status_dir / _STATUS_FILE
+
+        if not status_path.exists():
+            return "## Download Status\n\nNo download has been triggered yet."
+
+        status_obj = json.loads(status_path.read_text(encoding="utf-8"))
+        pid = status_obj.get("pid")
+        started_at = status_obj.get("started_at", "?")
+        mode = status_obj.get("mode", "?")
+        years = status_obj.get("years")
+        log_path = Path(status_obj.get("log_file", str(status_dir / _LOG_FILE)))
+
+        running = _is_pid_running(pid) if pid else False
+
+        log_tail = ""
+        if log_path.exists():
+            try:
+                text = log_path.read_text(encoding="utf-8", errors="replace")
+                lines = text.splitlines()
+                tail_lines = lines[-30:] if len(lines) > 30 else lines
+                log_tail = "\n".join(tail_lines)
+            except Exception:
+                log_tail = "(could not read log)"
+
+        if running:
+            status_label = "Running"
+        elif log_tail.rstrip().endswith("Done."):
+            status_label = "Completed"
+        elif log_tail:
+            error_lines = [l for l in log_tail.splitlines() if "error" in l.lower()]
+            status_label = "Failed" if error_lines else "Finished (check log)"
+        else:
+            status_label = "Unknown (no log)"
+
+        elapsed_str = ""
+        if started_at and started_at != "?":
+            try:
+                started = datetime.datetime.fromisoformat(started_at)
+                elapsed = datetime.datetime.now() - started
+                total_secs = int(elapsed.total_seconds())
+                elapsed_str = (
+                    f"{total_secs}s" if total_secs < 60
+                    else f"{total_secs // 60}m {total_secs % 60}s"
+                )
+            except Exception:
+                pass
+
+        info_lines = [
+            "## Download Status\n",
+            f"- **Status:** {status_label}",
+            f"- **Mode:** {mode}" + (f", years: {years}" if years else ""),
+            f"- **Started:** {started_at}" + (f" ({elapsed_str} elapsed)" if elapsed_str else ""),
+            f"- **PID:** {pid}",
+            f"- **Log:** `{log_path}`",
+        ]
+
+        if log_tail:
+            info_lines += ["", "### Recent Log Output", "```", log_tail, "```"]
+
+        return "\n".join(info_lines)
+    except Exception as e:
+        return f"## Error\n\n{e}"
 
 
 # ---------------------------------------------------------------------------
