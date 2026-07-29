@@ -1,6 +1,6 @@
 import pandas as pd
 import xml.etree.ElementTree as ET
-from typing import List, Optional, Dict, Any, Iterable
+from typing import List, Optional, Dict, Any, Iterable, Tuple
 from ..utils import log_error, log_warning
 
 STATEMENT_SEARCH_MAP: Dict[str, str] = {
@@ -8,6 +8,42 @@ STATEMENT_SEARCH_MAP: Dict[str, str] = {
     'IS': 'kasum',
     'CF': 'raha',
 }
+
+def _is_consolidated_name(name_lower: str) -> bool:
+    """True only for genuinely consolidated reports ("konsolideeritud"), not non-consolidated ones ("konsolideerimata")."""
+    return 'konsolideeritud' in name_lower and 'konsolideerimata' not in name_lower
+
+def _select_preferred_match(
+    matches: List[Tuple[str, str]],  # (code, name_lower)
+    consolidation_type: str,
+) -> Optional[str]:
+    """
+    Pick the best code from a list of (code, name_lower) candidates.
+
+    consolidation_type:
+      "consolidated"     — prefer "Konsolideeritud" variant; fall back to first match
+      "non-consolidated" — prefer "Konsolideerimata" variant; fall back to first match
+      "any"              — return first match with no preference
+    """
+    if not matches:
+        return None
+    if len(matches) == 1:
+        return matches[0][0]
+    if consolidation_type == "consolidated":
+        for code, name in matches:
+            if _is_consolidated_name(name):
+                return code
+        return matches[0][0]
+    elif consolidation_type == "non-consolidated":
+        for code, name in matches:
+            if 'konsolideerimata' in name:
+                return code
+        for code, name in matches:
+            if not _is_consolidated_name(name):
+                return code
+        return matches[0][0]
+    else:  # "any" — no preference, return first
+        return matches[0][0]
 
 def _safe_text(element: Optional[ET.Element]) -> Optional[str]:
     if element is None or element.text is None:
@@ -75,7 +111,8 @@ def create_latest_reports_dataframe(reports_data: List[Dict[str, Any]], names_da
 def extract_statement_code(
     xml_response: ET.Element,
     years: Iterable[int],
-    statement_type: str
+    statement_type: str,
+    consolidation_type: str = "any",
 ) -> str:
     ns = {
         'ns1': 'http://arireg.x-road.eu/producer/',
@@ -93,7 +130,7 @@ def extract_statement_code(
     codes: List[str] = []
 
     for year in years:
-        matched_code: Optional[str] = None
+        year_matches: List[Tuple[str, str]] = []  # (code, name_lower)
 
         for entry in entries:
             entry_year = _safe_text(entry.find('ns1:aruande_aasta', ns))
@@ -112,8 +149,9 @@ def extract_statement_code(
                 continue
 
             if search_substring in entry_name.lower():
-                matched_code = entry_code
-                break
+                year_matches.append((entry_code, entry_name.lower()))
+
+        matched_code = _select_preferred_match(year_matches, consolidation_type)
 
         if matched_code is not None:
             codes.append(matched_code)
@@ -302,7 +340,8 @@ def parse_statement_codes_by_year(
     xml_response: ET.Element,
     target_year: int,
     end_year: int,
-    statement_types: List[str]
+    statement_types: List[str],
+    consolidation_type: str = "any",
 ) -> Dict[str, List[Optional[str]]]:
     """
     Parse statement codes for multiple years and statement types using substring matching.
@@ -312,11 +351,16 @@ def parse_statement_codes_by_year(
     - IS: statement name contains "kasum"
     - CF: statement name contains "raha"
 
+    When both consolidated ("Konsolideeritud bilanss") and non-consolidated
+    ("Konsolideerimata bilanss") versions exist for the same year, consolidation_type
+    controls which is selected.
+
     Args:
         xml_response: XML response from get_annual_reports_list
         target_year: Starting year
         end_year: Ending year
         statement_types: List of statement types (e.g., ["BS", "IS", "CF"])
+        consolidation_type: "consolidated", "non-consolidated", or "any" (first match).
 
     Returns:
         Dictionary with statement_type as key and list of codes (ordered from target_year to end_year) as value
@@ -330,8 +374,8 @@ def parse_statement_codes_by_year(
     if not entries:
         return {st: [] for st in statement_types}
 
-    # Build a mapping: (year, statement_type) -> code
-    year_type_codes: Dict[tuple, Optional[str]] = {}
+    # Build a mapping: (year, statement_type) -> list of (code, name_lower) candidates
+    year_type_matches: Dict[tuple, List[Tuple[str, str]]] = {}
 
     for entry in entries:
         entry_year = _safe_text(entry.find('ns1:aruande_aasta', ns))
@@ -350,7 +394,6 @@ def parse_statement_codes_by_year(
         if entry_year_int < end_year or entry_year_int > target_year:
             continue
 
-        # Determine statement type based on name using substring matching
         entry_name_lower = entry_name.lower()
 
         for statement_type in statement_types:
@@ -360,12 +403,9 @@ def parse_statement_codes_by_year(
             if search_substring is None:
                 continue
 
-            # Check if the search substring is in the entry name (case-insensitive)
             if search_substring in entry_name_lower:
                 key = (entry_year_int, st_upper)
-                # Only store if not already stored (prioritize first match)
-                if key not in year_type_codes:
-                    year_type_codes[key] = entry_code
+                year_type_matches.setdefault(key, []).append((entry_code, entry_name_lower))
 
     # Build result: list of codes ordered from target_year to end_year
     result = {}
@@ -374,11 +414,10 @@ def parse_statement_codes_by_year(
         st_upper = statement_type.upper()
         codes = []
 
-        # Iterate from target_year down to end_year
         for year in range(target_year, end_year - 1, -1):
             key = (year, st_upper)
-            code = year_type_codes.get(key)
-            codes.append(code)
+            matches = year_type_matches.get(key, [])
+            codes.append(_select_preferred_match(matches, consolidation_type))
 
         result[st_upper] = codes
 
@@ -428,9 +467,10 @@ def parse_consolidation_status_by_year(
         if entry_year_int < end_year or entry_year_int > target_year:
             continue
 
-        # Check if "konsolid" appears in the statement name (case-insensitive)
+        # "Konsolideeritud" = consolidated; "Konsolideerimata" = non-consolidated.
+        # Only mark as consolidated when the name is genuinely consolidated.
         entry_name_lower = entry_name.lower()
-        if 'konsolid' in entry_name_lower:
+        if _is_consolidated_name(entry_name_lower):
             consolidation_by_year[entry_year_int] = True
         else:
             # Only set to False if not already set to True

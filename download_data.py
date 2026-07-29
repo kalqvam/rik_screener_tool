@@ -19,7 +19,10 @@ import glob
 from urllib.request import urlretrieve
 from urllib.error import URLError, HTTPError
 
-import requests
+try:
+    import requests
+except ImportError:
+    requests = None
 
 # ---------------------------------------------------------------------------
 # EMTA — stable Nextcloud share links, direct CSV downloads
@@ -90,6 +93,18 @@ def _glob_newest(directory, pattern):
     """Return the newest file matching pattern in directory, or None."""
     matches = sorted(glob.glob(os.path.join(directory, pattern)))
     return matches[-1] if matches else None
+
+
+def _parse_kuni_date(name):
+    """
+    Extract the date from a filename like 'prefix_kuni_30062025.csv'.
+    Returns a comparable (yyyy, mm, dd) tuple, or None if no date found.
+    """
+    m = re.search(r'kuni_(\d{2})(\d{2})(\d{4})', name)
+    if not m:
+        return None
+    dd, mm, yyyy = int(m.group(1)), int(m.group(2)), int(m.group(3))
+    return (yyyy, mm, dd)
 
 
 def _find_rik_urls(html):
@@ -241,6 +256,10 @@ def download_emta(target_dir, force=False):
 
 def download_rik(target_dir, years=None, force=False):
     _print("\n=== RIK files ===")
+    if requests is None:
+        _print("  ERROR: 'requests' is not installed. Run: pip install requests")
+        return
+
     if years is None:
         years = DEFAULT_YEARS
 
@@ -273,15 +292,23 @@ def download_rik(target_dir, years=None, force=False):
         base_name = filename.replace(".zip", "")
         glob_pat = RIK_GLOB_PATTERNS.get(label)
 
-        # Skip if already have a matching extracted file
+        # Skip if already have a current or newer version on disk
         if not force and glob_pat:
             existing = _glob_newest(target_dir, glob_pat)
             if existing:
                 ex_name = os.path.basename(existing)
-                prefix = base_name.split("kuni_")[0] if "kuni_" in base_name else base_name
-                if ex_name == base_name or ex_name.startswith(prefix):
+                local_date = _parse_kuni_date(ex_name)
+                remote_date = _parse_kuni_date(base_name)
+                if local_date and remote_date:
+                    if local_date >= remote_date:
+                        size = _file_size_mb(existing)
+                        _print(f"  SKIP  {label}  ({ex_name}, up to date)")
+                        continue
+                    else:
+                        _print(f"  UPDATE {label}  ({ex_name} ->{base_name})")
+                elif ex_name == base_name:
                     size = _file_size_mb(existing)
-                    _print(f"  SKIP  {label}  ({ex_name}, {size:.1f} MB)")
+                    _print(f"  SKIP  {label}  ({ex_name})")
                     continue
 
         downloaded = _download_file_session(session, url, zip_dest, label, force=True)
@@ -303,9 +330,21 @@ def download_rik(target_dir, years=None, force=False):
         if not force:
             existing = _glob_newest(target_dir, year_glob)
             if existing:
-                size = _file_size_mb(existing)
-                _print(f"  SKIP  year {year}  ({os.path.basename(existing)}, {size:.1f} MB)")
-                continue
+                ex_name = os.path.basename(existing)
+                remote_base = filename.replace(".zip", "")
+                local_date = _parse_kuni_date(ex_name)
+                remote_date = _parse_kuni_date(remote_base)
+                if local_date and remote_date:
+                    if local_date >= remote_date:
+                        size = _file_size_mb(existing)
+                        _print(f"  SKIP  year {year}  ({ex_name}, up to date)")
+                        continue
+                    else:
+                        _print(f"  UPDATE year {year}  ({ex_name} ->{remote_base})")
+                elif ex_name == remote_base:
+                    size = _file_size_mb(existing)
+                    _print(f"  SKIP  year {year}  ({ex_name})")
+                    continue
 
         downloaded = _download_file_session(session, url, zip_dest, f"year {year}", force=True)
         if downloaded:

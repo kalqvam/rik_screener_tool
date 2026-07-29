@@ -114,7 +114,8 @@ def _merge_year_frames(existing: pd.DataFrame, new_frame: pd.DataFrame) -> pd.Da
 def _collect_company_statements(
     company_code: str,
     years: Iterable[int],
-    statement_type: str
+    statement_type: str,
+    consolidation_type: str = "any",
 ) -> Optional[Tuple[pd.Series, pd.DataFrame]]:
 
     xml_list = get_annual_reports_list(company_code)
@@ -123,7 +124,7 @@ def _collect_company_statements(
         return None
 
     try:
-        statement_code = extract_statement_code(xml_list, years, statement_type)
+        statement_code = extract_statement_code(xml_list, years, statement_type, consolidation_type)
     except ValueError as exc:
         log_warning(f"{company_code}: {exc}")
         return None
@@ -182,7 +183,8 @@ def get_financial_statements(
     starting_year: Optional[int] = None,
     num_requests: int = 1,
     year_step: int = 2,
-    rate_limit: int = 20
+    rate_limit: int = 20,
+    consolidation_type: str = "any",
 ) -> pd.DataFrame:
 
     if num_requests < 1:
@@ -212,7 +214,7 @@ def get_financial_statements(
     for index, company_code in enumerate(valid_codes, 1):
         log_info(format_progress(index, len(valid_codes), "Statements"))
 
-        result = _collect_company_statements(company_code, years, statement_type)
+        result = _collect_company_statements(company_code, years, statement_type, consolidation_type)
 
         if result is None:
             continue
@@ -247,7 +249,8 @@ def check_statement_consistency(
     end_year: int,
     statement_types: List[str] = None,
     rate_limit: int = 20,
-    output_file: Optional[str] = None
+    output_file: Optional[str] = None,
+    consolidation_type: str = "any",
 ) -> Dict[str, Tuple[str, List[List[Optional[str]]], str]]:
     """
     Check if statement codes remained consistent across a range of years for multiple companies.
@@ -318,7 +321,8 @@ def check_statement_consistency(
             xml_response,
             target_year,
             end_year,
-            valid_statement_types
+            valid_statement_types,
+            consolidation_type,
         )
 
         # Parse consolidation status by year
